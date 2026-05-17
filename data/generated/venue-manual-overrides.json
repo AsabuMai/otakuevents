@@ -1,0 +1,51 @@
+[
+  {
+    "id": "eventernote-place-153",
+    "name": "AKIHABARAゲーマーズ本店",
+    "area": "東京都",
+    "sourceUrl": "https://www.eventernote.com/places/153",
+    "note": "Eventernote place page is currently inaccessible from direct fetch, but indexed page data identifies this venue."
+  },
+  {
+    "id": "eventernote-place-109",
+    "name": "渋谷clubasia",
+    "area": "東京都",
+    "sourceUrl": "https://ticketvillage.jp/events/12789",
+    "note": "Verified from linked event pages for high-volume unresolved Eventernote place_id."
+  },
+  {
+    "id": "eventernote-place-1628",
+    "name": "ヨドバシAkiba イベントスペース",
+    "area": "東京都",
+    "sourceUrl": "https://www.eventernote.com/places/1628",
+    "note": "Eventernote indexed page data identifies this venue."
+  },
+  {
+    "id": "eventernote-place-13180",
+    "name": "TIME SHARING Biz 渋谷宮益坂3A",
+    "area": "東京都",
+    "sourceUrl": "https://www.eventernote.com/places/12693",
+    "note": "Eventernote indexed parent venue references this room for place_id 13180."
+  },
+  {
+    "id": "eventernote-place-14329",
+    "name": "名古屋CLUB UPSET",
+    "area": "愛知県",
+    "sourceUrl": "https://www.atpress.ne.jp/news/382806",
+    "note": "Verified from official/public event listing for unresolved Eventernote place_id samples."
+  },
+  {
+    "id": "eventernote-place-8595",
+    "name": "駒澤大学",
+    "area": "東京都",
+    "sourceUrl": "https://www.eventernote.com/",
+    "note": "Inferred from repeated unresolved Eventernote event titles for this place_id."
+  },
+  {
+    "id": "eventernote-place-1093",
+    "name": "みやこめっせ",
+    "area": "京都府",
+    "sourceUrl": "https://www.eventernote.com/",
+    "note": "Inferred from repeated Kyoto International Manga Anime Fair event titles for this place_id."
+  }
+]
