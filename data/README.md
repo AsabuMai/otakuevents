@@ -58,6 +58,20 @@ Check your local data state with:
 npm run data:verify
 ```
 
+To share the exact local dataset with teammates, create a runnable data pack:
+
+```bash
+npm run data:pack
+```
+
+This writes a zip file under `releases/`, for example:
+
+```text
+releases/otakuevents-data-20260518.zip
+```
+
+Upload that zip to GitHub Releases, Google Drive, OneDrive, or another shared storage. Teammates should unzip it at the repository root so the files land back under `data/`.
+
 ### Option A: Copy From A Teammate
 
 Ask a teammate for the current `data/generated/` files and place them under the same paths in this repo. This is the quickest way to get the app running with the current working dataset.
