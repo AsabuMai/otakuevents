@@ -722,6 +722,7 @@ createApp({
     const currentMonth = ref(initialDate.slice(0, 7));
     const selectedDate = ref(initialDate);
     const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+    const notebookStorageKey = "eventnote-japan-notebook";
     const followedCount = computed(() => artistRows.value.length);
     const joinedEvents = ref(new Set([
       "ラブライブ！虹ヶ咲 学园偶像同好会 Fan Meeting",
@@ -1286,7 +1287,24 @@ createApp({
     }
 
     function saveMemo() {
+      window.localStorage.setItem(notebookStorageKey, JSON.stringify({
+        budget: budget.value,
+        memo: memo.value,
+        savedAt: new Date().toISOString()
+      }));
       saveState.value = `已保存。本月预算 ¥${Number(budget.value || 0).toLocaleString("ja-JP")}`;
+    }
+
+    function loadNotebook() {
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(notebookStorageKey) || "{}");
+        if (saved && typeof saved === "object") {
+          if (saved.budget !== undefined) budget.value = saved.budget;
+          if (typeof saved.memo === "string") memo.value = saved.memo;
+        }
+      } catch (error) {
+        console.error(error);
+      }
     }
 
     document.addEventListener("click", (event) => {
@@ -1376,6 +1394,7 @@ createApp({
       loadError.value = error?.message || String(error);
       console.error(error);
     });
+    loadNotebook();
 
     if (page.value === "event") {
       loadEventBySourceId(routeParamFromHash()).catch(console.error);

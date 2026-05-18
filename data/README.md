@@ -28,3 +28,69 @@ Source:
 - Latest overlay coverage depends on the most recent crawl and may include future events already published by Eventernote.
 
 Large generated files are reproducible and should not be committed.
+
+## Bootstrap For A Fresh Clone
+
+The repository intentionally does not include the large raw and generated datasets:
+
+- `data/raw/eventernote-events.json` is about 100 MB
+- `data/generated/eventernote-catalog.json` is about 266 MB
+- `data/generated/eventernote-latest.json` is about 95 MB
+
+To run the full local app, you need at least:
+
+```text
+data/generated/eventernote-catalog.json
+```
+
+Optional but recommended:
+
+```text
+data/generated/eventernote-latest.json
+data/generated/venue-names.json
+data/generated/event-venue-overrides.json
+data/generated/venue-manual-overrides.json
+```
+
+Check your local data state with:
+
+```bash
+npm run data:verify
+```
+
+### Option A: Copy From A Teammate
+
+Ask a teammate for the current `data/generated/` files and place them under the same paths in this repo. This is the quickest way to get the app running with the current working dataset.
+
+### Option B: Rebuild From Source
+
+Download the historical Eventernote dataset from Zenodo:
+
+- https://zenodo.org/records/11151063
+- DOI: `10.5281/zenodo.11151063`
+
+Place the raw JSON at:
+
+```text
+data/raw/eventernote-events.json
+```
+
+Then rebuild:
+
+```bash
+node scripts/build-eventernote-catalog.mjs
+node scripts/sync-eventernote-latest.mjs --days=30 --detail-limit=1200
+node scripts/clean-eventernote-latest.mjs
+```
+
+The latest sync scripts fetch Eventernote pages from the network and can take a while.
+
+## Test Fixtures
+
+CI does not require the full dataset. `scripts/smoke-test-api.mjs` creates a tiny temporary catalog and starts `server.mjs` with:
+
+```bash
+EVENTNOTE_DATA_DIR=/path/to/fixture-data
+```
+
+This keeps API smoke tests fast and reproducible.

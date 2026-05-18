@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { extname, isAbsolute, join, normalize, resolve } from "node:path";
 import {
   cleanEventRecord,
   isConcreteVenueName,
@@ -13,8 +13,13 @@ import { detectWork, slugify, workRules } from "./scripts/lib/classify.mjs";
 const root = process.cwd();
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || "0.0.0.0";
-const catalogPath = join(root, "data/generated/eventernote-catalog.json");
-const latestPath = join(root, "data/generated/eventernote-latest.json");
+const dataRoot = process.env.EVENTNOTE_DATA_DIR
+  ? isAbsolute(process.env.EVENTNOTE_DATA_DIR)
+    ? process.env.EVENTNOTE_DATA_DIR
+    : resolve(root, process.env.EVENTNOTE_DATA_DIR)
+  : join(root, "data");
+const catalogPath = join(dataRoot, "generated/eventernote-catalog.json");
+const latestPath = join(dataRoot, "generated/eventernote-latest.json");
 let catalogCache;
 
 const types = {
