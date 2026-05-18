@@ -8,7 +8,7 @@ The browser does not import the generated datasets directly. `server.mjs` loads 
 
 ```bash
 npm install
-npm run data:verify
+npm run data:download
 PORT=5175 node server.mjs
 ```
 
@@ -18,7 +18,7 @@ Then open:
 http://127.0.0.1:5175/
 ```
 
-If `npm run data:verify` reports missing data, see [`data/README.md`](data/README.md). Large source/generated datasets are not committed to Git.
+`npm run data:download` downloads the current data pack from GitHub Releases and extracts it under `data/`. If you already have the data locally, use `npm run data:verify` instead. Large source/generated datasets are not committed to Git.
 
 On a phone in the same Wi-Fi, use the machine LAN IP, for example:
 
@@ -56,6 +56,7 @@ Generated large JSON files are intentionally ignored by git and can be rebuilt o
 ## Scripts
 
 ```bash
+npm run data:download
 npm run data:verify
 node scripts/build-eventernote-catalog.mjs
 node scripts/sync-eventernote-latest.mjs --days=30 --detail-limit=1200

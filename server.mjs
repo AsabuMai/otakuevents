@@ -245,6 +245,16 @@ function pushSuggestion(target, seen, value, query, limit) {
 }
 
 function handleApi(pathname, searchParams, response) {
+  if (pathname === "/api/health") {
+    sendJson(response, {
+      ok: true,
+      dataRoot,
+      catalogExists: existsSync(catalogPath),
+      latestExists: existsSync(latestPath)
+    });
+    return true;
+  }
+
   const catalog = loadCatalog();
 
   if (pathname === "/api/meta") {

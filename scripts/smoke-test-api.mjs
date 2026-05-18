@@ -133,6 +133,10 @@ try {
 
   await waitForServer();
 
+  const health = await getJson("/api/health");
+  assert.equal(health.ok, true);
+  assert.equal(health.catalogExists, true);
+
   const meta = await getJson("/api/meta");
   assert.equal(meta.events, 2);
   assert.equal(meta.frontendMode, "paginated-api");

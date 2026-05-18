@@ -58,6 +58,18 @@ Check your local data state with:
 npm run data:verify
 ```
 
+Download and extract the current shared data pack from GitHub Releases:
+
+```bash
+npm run data:download
+```
+
+To use a different zip URL:
+
+```bash
+npm run data:download -- https://example.com/otakuevents-data.zip
+```
+
 To share the exact local dataset with teammates, create a runnable data pack:
 
 ```bash

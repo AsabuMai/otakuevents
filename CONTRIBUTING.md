@@ -16,11 +16,11 @@ Open a pull request when the change is ready. Keep each PR focused on one featur
 
 ```bash
 npm install
-npm run data:verify
+npm run data:download
 PORT=5175 node server.mjs
 ```
 
-Large Eventernote data files are not committed. If `npm run data:verify` reports missing data, follow `data/README.md`.
+Large Eventernote data files are not committed. If you already have the data locally, `npm run data:verify` is enough; otherwise use `npm run data:download`.
 
 ## Before Opening A PR
 

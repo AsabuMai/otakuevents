@@ -8,6 +8,7 @@ Use Node.js 22 or newer.
 
 ```bash
 npm ci --omit=dev
+npm run data:download
 PORT=5175 HOST=0.0.0.0 node server.mjs
 ```
 
@@ -33,6 +34,14 @@ EVENTNOTE_DATA_DIR=/var/lib/otakuevents/data PORT=5175 HOST=0.0.0.0 node server.
 ```
 
 The directory should contain a `generated/` subdirectory.
+
+Health check endpoint:
+
+```text
+/api/health
+```
+
+This endpoint does not load the full catalog; it only reports whether the expected data files exist.
 
 ## Temporary Public Preview
 
