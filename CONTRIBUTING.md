@@ -45,6 +45,7 @@ Do not commit large reproducible datasets:
 - `data/raw/eventernote-events.json`
 - `data/generated/eventernote-catalog.json`
 - `data/generated/eventernote-latest.json`
+- `data/local/`
 
 If a PR changes data-generation behavior, include the command you ran and a short summary from:
 

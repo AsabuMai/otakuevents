@@ -10,6 +10,7 @@ releases/
 data/raw/eventernote-events.json
 data/generated/eventernote-catalog.json
 data/generated/eventernote-latest.json
+data/local/
 
 # Local tunnel binary.
 tools/cloudflared

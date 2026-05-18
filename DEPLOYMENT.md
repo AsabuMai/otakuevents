@@ -43,6 +43,17 @@ Health check endpoint:
 
 This endpoint does not load the full catalog; it only reports whether the expected data files exist.
 
+## Accounts
+
+The built-in account system stores local users under:
+
+```text
+data/local/users.json
+data/local/auth-secret
+```
+
+These files are intentionally ignored by Git. Passwords are hashed with Node's `scrypt`, and login sessions are signed HttpOnly cookies. Set `AUTH_COOKIE_SECURE=1` when serving only over HTTPS and you want cookies marked `Secure`.
+
 ## Temporary Public Preview
 
 For a quick demo from a laptop:

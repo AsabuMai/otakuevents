@@ -71,6 +71,7 @@ Shared classification rules live in `scripts/lib/classify.mjs` and are used by b
 - Keyword, location, and type filters that update the calendar and day list
 - Event detail pages with performer, venue, work, and source links
 - Performer, work, and venue directories backed by paginated API responses
+- Local username/password accounts with HttpOnly cookie sessions
 - Local participation notes
 - Source metadata page
 

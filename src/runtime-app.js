@@ -1,5 +1,5 @@
 import { computed, createApp, ref, watch } from "/node_modules/vue/dist/vue.esm-browser.js";
-import { getJson } from "./api.js";
+import { getJson, postJson } from "./api.js";
 import {
   defaultCityOptions,
   displayArtists,
@@ -29,6 +29,9 @@ const template = `
       </a>
     </nav>
     <div class="top-actions">
+      <button class="ghost-button account-chip" type="button" @click="go('account')">
+        {{ authUser ? authUser.displayName : "登录" }}
+      </button>
       <button class="icon-button" type="button" aria-label="通知">
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
@@ -593,6 +596,61 @@ const template = `
       </section>
     </section>
 
+    <section v-if="page === 'account'" class="page-view event-detail-page">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">Account</p>
+          <h1>账号</h1>
+        </div>
+      </div>
+
+      <section v-if="authUser" class="panel auth-panel">
+        <div class="panel-head">
+          <h2>{{ authUser.displayName }}</h2>
+          <span class="muted">@{{ authUser.username }}</span>
+        </div>
+        <div class="detail-grid">
+          <div>
+            <span>登录状态</span>
+            <strong>已登录</strong>
+          </div>
+          <div>
+            <span>账号 ID</span>
+            <strong>{{ authUser.id }}</strong>
+          </div>
+        </div>
+        <button class="secondary-button" type="button" @click="logout" :disabled="authLoading">退出登录</button>
+      </section>
+
+      <section v-else class="panel auth-panel">
+        <div class="panel-head">
+          <h2>{{ authMode === "login" ? "登录" : "注册" }}</h2>
+          <div class="auth-switch">
+            <button type="button" :class="{ active: authMode === 'login' }" @click="authMode = 'login'">登录</button>
+            <button type="button" :class="{ active: authMode === 'register' }" @click="authMode = 'register'">注册</button>
+          </div>
+        </div>
+        <form class="auth-form" @submit.prevent="submitAuth">
+          <label class="search-field">
+            <span>用户名</span>
+            <input v-model="authUsername" autocomplete="username" placeholder="asabu_mai">
+          </label>
+          <label v-if="authMode === 'register'" class="search-field">
+            <span>显示名</span>
+            <input v-model="authDisplayName" autocomplete="name" placeholder="麻布舞">
+          </label>
+          <label class="search-field">
+            <span>密码</span>
+            <input v-model="authPassword" type="password" autocomplete="current-password" placeholder="至少 8 位">
+          </label>
+          <p v-if="authError" class="load-error">{{ authError }}</p>
+          <button class="primary-button" type="submit" :disabled="authLoading">
+            {{ authLoading ? "处理中..." : authMode === "login" ? "登录" : "创建账号" }}
+          </button>
+        </form>
+      </section>
+    </section>
+
     <section v-if="page === 'sources'" class="page-view">
       <div class="page-title">
         <div>
@@ -640,6 +698,7 @@ createApp({
       { id: "works", label: "作品", short: "作品" },
       { id: "venues", label: "会场", short: "会场" },
       { id: "notebook", label: "笔记", short: "笔记" },
+      { id: "account", label: "账号", short: "账号" },
       { id: "sources", label: "来源", short: "来源" }
     ];
 
@@ -652,6 +711,13 @@ createApp({
     const budget = ref(42000);
     const memo = ref("");
     const saveState = ref("");
+    const authUser = ref(null);
+    const authMode = ref("login");
+    const authUsername = ref("");
+    const authDisplayName = ref("");
+    const authPassword = ref("");
+    const authError = ref("");
+    const authLoading = ref(false);
     const events = ref([]);
     const dayEvents = ref([]);
     const relatedEvents = ref([]);
@@ -946,6 +1012,43 @@ createApp({
       } else if (page.value === "venues") {
         const payload = await getJson(`/api/venues?${params}`);
         venues.value = payload.items;
+      }
+    }
+
+    async function loadAuthSession() {
+      const payload = await getJson("/api/auth/session");
+      authUser.value = payload.user || null;
+    }
+
+    async function submitAuth() {
+      authLoading.value = true;
+      authError.value = "";
+      try {
+        const payload = await postJson(`/api/auth/${authMode.value}`, {
+          username: authUsername.value,
+          displayName: authDisplayName.value,
+          password: authPassword.value
+        });
+        authUser.value = payload.user;
+        authPassword.value = "";
+      } catch (error) {
+        authError.value = error?.message || String(error);
+      } finally {
+        authLoading.value = false;
+      }
+    }
+
+    async function logout() {
+      authLoading.value = true;
+      authError.value = "";
+      try {
+        await postJson("/api/auth/logout");
+        authUser.value = null;
+        authPassword.value = "";
+      } catch (error) {
+        authError.value = error?.message || String(error);
+      } finally {
+        authLoading.value = false;
       }
     }
 
@@ -1291,7 +1394,7 @@ createApp({
       });
     });
 
-    Promise.all([loadMeta(), loadCalendar(), loadYearOverview(), loadLists()]).catch((error) => {
+    Promise.all([loadMeta(), loadCalendar(), loadYearOverview(), loadLists(), loadAuthSession()]).catch((error) => {
       loading.value = false;
       loadError.value = error?.message || String(error);
       console.error(error);
@@ -1313,6 +1416,13 @@ createApp({
       applyQuerySuggestion,
       artists: artistRows,
       artistHistoricalTotal,
+      authDisplayName,
+      authError,
+      authLoading,
+      authMode,
+      authPassword,
+      authUser,
+      authUsername,
       budget,
       city,
       cityOptions,
@@ -1375,6 +1485,8 @@ createApp({
       setYear,
       showDirectorySuggestions,
       showQuerySuggestions,
+      logout,
+      submitAuth,
       toggleJoin,
       typeLabel,
       typeOptions,

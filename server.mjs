@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, isAbsolute, join, normalize, resolve } from "node:path";
+import { createAuth } from "./server/auth.mjs";
 import {
   cleanEventRecord,
   isConcreteVenueName,
@@ -20,6 +21,7 @@ const dataRoot = process.env.EVENTNOTE_DATA_DIR
   : join(root, "data");
 const catalogPath = join(dataRoot, "generated/eventernote-catalog.json");
 const latestPath = join(dataRoot, "generated/eventernote-latest.json");
+const auth = createAuth({ dataRoot });
 let catalogCache;
 
 const types = {
@@ -469,11 +471,19 @@ function handleApi(pathname, searchParams, response) {
   return false;
 }
 
-createServer((request, response) => {
+createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const rawPath = decodeURIComponent(url.pathname);
 
   if (rawPath.startsWith("/api/")) {
+    try {
+      if (await auth.handleAuthApi(request, response, rawPath)) return;
+    } catch (error) {
+      response.statusCode = 400;
+      sendJson(response, { error: error?.message || "Invalid request" });
+      return;
+    }
+
     if (!handleApi(rawPath, url.searchParams, response)) {
       response.statusCode = 404;
       sendJson(response, { error: "Not found" });

@@ -6,6 +6,7 @@ export async function getJson(path) {
   try {
     const response = await fetch(url, {
       cache: "no-store",
+      credentials: "same-origin",
       signal: controller.signal
     });
     if (!response.ok) throw new Error(`Request failed: ${path}`);
@@ -13,4 +14,19 @@ export async function getJson(path) {
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+export async function postJson(path, payload = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+    credentials: "same-origin"
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error || `Request failed: ${path}`);
+  return data;
 }

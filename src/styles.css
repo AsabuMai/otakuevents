@@ -180,6 +180,13 @@ h2 {
   gap: 10px;
 }
 
+.account-chip {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .icon-button,
 .primary-button,
 .secondary-button,
@@ -840,6 +847,39 @@ textarea {
 .suggestion-list button:active,
 .suggestion-list button:hover {
   background: rgba(143, 172, 152, 0.13);
+}
+
+.auth-panel {
+  max-width: 720px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-switch {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  background: rgba(143, 172, 152, 0.12);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.auth-switch button {
+  min-height: 32px;
+  padding: 0 12px;
+  color: var(--accent-deep);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  font-weight: 800;
+}
+
+.auth-switch button.active {
+  color: #fbfaf5;
+  background: var(--accent-deep);
 }
 
 .search-field input:focus,

@@ -95,6 +95,23 @@ async function getJson(path) {
   return response.json();
 }
 
+async function postJson(path, payload, cookie = "") {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookie ? { Cookie: cookie } : {})
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json();
+  assert.equal(response.ok, true, `${path} returned ${response.status}: ${JSON.stringify(data)}`);
+  return {
+    cookie: response.headers.get("set-cookie") || cookie,
+    data
+  };
+}
+
 async function waitForServer() {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -136,6 +153,24 @@ try {
   const health = await getJson("/api/health");
   assert.equal(health.ok, true);
   assert.equal(health.catalogExists, true);
+
+  const register = await postJson("/api/auth/register", {
+    username: "sample_user",
+    displayName: "Sample User",
+    password: "correct-horse"
+  });
+  assert.equal(register.data.user.username, "sample_user");
+
+  const session = await fetch(`${baseUrl}/api/auth/session`, {
+    headers: {
+      Cookie: register.cookie
+    }
+  });
+  const sessionPayload = await session.json();
+  assert.equal(sessionPayload.user.displayName, "Sample User");
+
+  const logout = await postJson("/api/auth/logout", {}, register.cookie);
+  assert.equal(logout.data.ok, true);
 
   const meta = await getJson("/api/meta");
   assert.equal(meta.events, 2);
