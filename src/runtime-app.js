@@ -1,5 +1,5 @@
 import { computed, createApp, ref, watch } from "/node_modules/vue/dist/vue.esm-browser.js";
-import { getJson, postJson } from "./api.js";
+import { deleteJson, getJson, postJson } from "./api.js";
 import {
   defaultCityOptions,
   displayArtists,
@@ -23,26 +23,19 @@ const template = `
       <span class="brand-mark">E</span>
       <span>Eventnote Japan</span>
     </a>
-    <nav class="nav" aria-label="主导航">
+    <nav v-if="!isAccountPage" class="nav" aria-label="主导航">
       <a v-for="item in navItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
         {{ item.label }}
       </a>
     </nav>
     <div class="top-actions">
-      <button class="ghost-button account-chip" type="button" @click="go('account')">
+      <button class="ghost-button account-chip" type="button" @click="go('profile')">
         {{ authUser ? authUser.displayName : "登录" }}
       </button>
-      <button class="icon-button" type="button" aria-label="通知">
-        <svg aria-hidden="true" viewBox="0 0 24 24">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
-          <path d="M13.7 21a2 2 0 0 1-3.4 0"></path>
-        </svg>
-      </button>
-      <button class="primary-button" type="button" @click="go('events')">查活动</button>
     </div>
   </header>
 
-  <nav class="mobile-tabs" aria-label="移动导航">
+  <nav v-if="!isAccountPage" class="mobile-tabs" aria-label="移动导航">
     <a v-for="item in navItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
       {{ item.short }}
     </a>
@@ -53,18 +46,18 @@ const template = `
       <section class="mobile-dashboard home-overview">
         <div class="app-greeting">
           <div>
-            <p>Anime / Seiyuu Archive</p>
-            <h1>活动资料库</h1>
+            <p>Event planning workspace</p>
+            <h1>{{ authUser ? "我的活动控制台" : "发现并管理活动" }}</h1>
           </div>
         </div>
 
         <section class="wallet-card">
           <div>
-            <span>历史活动</span>
-            <strong>{{ meta.events?.toLocaleString("ja-JP") || "..." }}</strong>
+            <span>{{ authUser ? "我的收藏活动" : "可检索活动" }}</span>
+            <strong>{{ authUser ? favoriteItems.length.toLocaleString("ja-JP") : meta.events?.toLocaleString("ja-JP") || "..." }}</strong>
           </div>
-          <p>Eventernote historical archive</p>
-          <small>{{ selectedDate }} · 本月 {{ calendarTotal.toLocaleString("ja-JP") }} 场</small>
+          <p>{{ authUser ? "Upcoming plans, follows, calendar sync" : "Eventernote archive with personal planning" }}</p>
+          <small>{{ authUser ? "关注 " + followedEntityCount.toLocaleString("ja-JP") + " 个对象" : selectedDate + " · 本月 " + calendarTotal.toLocaleString("ja-JP") + " 场" }}</small>
         </section>
 
         <div class="service-grid">
@@ -81,17 +74,38 @@ const template = `
         <div class="metric"><span>当前月活动</span><strong>{{ calendarTotal.toLocaleString("ja-JP") }}</strong></div>
       </section>
 
+      <section class="management-strip">
+        <article class="management-card primary-plan">
+          <span>下一步</span>
+          <strong>{{ authUser ? nextPlanLabel : "先收藏想去的活动" }}</strong>
+          <p>{{ authUser ? "从详情页更新抽选、购票、参战状态。" : "登录后可把活动加入个人日历并记录票务状态。" }}</p>
+          <button class="secondary-button" type="button" @click="authUser ? go('favorites') : go('profile')">
+            {{ authUser ? "打开我的活动" : "开始管理" }}
+          </button>
+        </article>
+        <article class="management-card">
+          <span>即将到来</span>
+          <strong>{{ upcomingFavoriteItems.length.toLocaleString("ja-JP") }}</strong>
+          <p>收藏活动中日期不早于今天的项目。</p>
+        </article>
+        <article class="management-card">
+          <span>关注对象</span>
+          <strong>{{ followedEntityCount.toLocaleString("ja-JP") }}</strong>
+          <p>出演者、作品、会场会汇总到我的页面。</p>
+        </article>
+      </section>
+
       <section class="home-sections">
         <div class="content-grid">
           <div class="section-head">
             <div>
-              <p class="eyebrow">Today pick</p>
-              <h2>{{ selectedDateLabel }}</h2>
+              <p class="eyebrow">{{ authUser && upcomingFavoriteItems.length ? "My next plans" : "Today pick" }}</p>
+              <h2>{{ authUser && upcomingFavoriteItems.length ? "近期收藏活动" : selectedDateLabel }}</h2>
             </div>
-            <button class="ghost-button" type="button" @click="go('events')">View All</button>
+            <button class="ghost-button" type="button" @click="authUser && upcomingFavoriteItems.length ? go('favorites') : go('events')">View All</button>
           </div>
           <div class="event-list compact">
-        <article v-for="event in dayEvents.slice(0, 5)" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
+            <article v-for="event in homeEvents" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
               <div class="date-box">
                 <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
               </div>
@@ -103,11 +117,11 @@ const template = `
                   <span v-for="tag in event.tags" :key="tag" class="tag">{{ tag }}</span>
                 </div>
               </div>
-              <button class="primary-button join-button" :class="{ joined: isJoined(event.title) }" type="button" @click.stop="toggleJoin(event.title)">
-                {{ isJoined(event.title) ? "已参加" : "参加予定" }}
+              <button class="primary-button join-button" :class="{ joined: isJoined(event) }" type="button" @click.stop="toggleJoin(event)">
+                {{ authUser ? (isJoined(event) ? "已收藏" : "想去") : "登录收藏" }}
               </button>
             </article>
-            <p v-if="dayEvents.length === 0" class="muted">{{ loading ? "加载中..." : "这一天没有活动。" }}</p>
+            <p v-if="homeEvents.length === 0" class="muted">{{ loading ? "加载中..." : "还没有可展示活动。" }}</p>
           </div>
         </div>
 
@@ -244,9 +258,6 @@ const template = `
               <span v-for="tag in eventDisplayTags(event)" :key="tag" class="tag">{{ tag }}</span>
             </div>
           </div>
-          <button class="primary-button join-button" type="button" @click.stop="openEvent(event)">
-            查看详情
-          </button>
         </article>
         <p v-if="dayEvents.length === 0" class="muted">{{ loading ? "加载中..." : "这一天没有匹配活动。" }}</p>
       </div>
@@ -270,12 +281,41 @@ const template = `
             <span class="tag status-tag">{{ typeLabel(selectedEvent.type) }}</span>
             <span v-for="tag in eventDisplayTags(selectedEvent)" :key="tag" class="tag">{{ tag }}</span>
           </div>
+          <div class="detail-actions detail-actions-primary">
+            <button class="primary-button" :class="{ joined: isJoined(selectedEvent) }" type="button" @click="toggleJoin(selectedEvent)">
+              {{ authUser ? (isJoined(selectedEvent) ? "已加入我的活动" : "加入我的活动") : "登录后加入" }}
+            </button>
+            <a v-if="eventExtra.ticketUrl" class="primary-button link-button" :href="eventExtra.ticketUrl" target="_blank" rel="noreferrer">票务</a>
+            <a v-if="eventExtra.officialUrl" class="secondary-button link-button" :href="eventExtra.officialUrl" target="_blank" rel="noreferrer">官网</a>
+            <a class="secondary-button link-button" :href="mapUrlForVenue(selectedEvent.venue)" target="_blank" rel="noreferrer">地图</a>
+          </div>
         </div>
+
+        <section class="action-summary">
+          <div>
+            <span>我的状态</span>
+            <strong>{{ authUser ? eventNoteStatusLabel : "未登录" }}</strong>
+            <small>{{ authUser ? "可记录票务、同行、座位和现场注意点" : "登录后保存活动状态和备注" }}</small>
+          </div>
+          <div>
+            <span>行动信息</span>
+            <strong>{{ eventExtra.ticketUrl || eventExtra.officialUrl ? "已有链接" : "待补充" }}</strong>
+            <small>{{ actionInfoSummary }}</small>
+          </div>
+        </section>
 
         <div class="detail-grid">
           <div>
             <span>日期</span>
             <strong>{{ formatDetailDate(selectedEvent.date) }}</strong>
+          </div>
+          <div>
+            <span>开场 / 开演</span>
+            <strong>{{ eventExtra.openTime || eventExtra.startTime ? (eventExtra.openTime || "未补充") + " / " + (eventExtra.startTime || "未补充") : "未补充" }}</strong>
+          </div>
+          <div>
+            <span>地区</span>
+            <strong>{{ selectedEvent.city || "未标注" }}</strong>
           </div>
           <div>
             <span>会场</span>
@@ -286,10 +326,49 @@ const template = `
             <strong>{{ selectedEvent.work }}</strong>
           </div>
           <div>
-            <span>来源</span>
-            <strong>{{ selectedEvent.sourceName }}</strong>
+            <span>出演者</span>
+            <strong>{{ selectedEvent.artists.length.toLocaleString("ja-JP") }} 人 / 组</strong>
+          </div>
+          <div>
+            <span>票价</span>
+            <strong>{{ eventExtra.price || "未补充" }}</strong>
           </div>
         </div>
+
+        <section v-if="eventExtra.ticketInfo" class="panel detail-section event-extra-panel">
+          <div class="panel-head">
+            <h2>活动补充</h2>
+          </div>
+          <p class="event-extra-note">{{ eventExtra.ticketInfo }}</p>
+        </section>
+
+        <section v-if="!authUser" class="panel event-note-panel sign-in-nudge">
+          <div>
+            <h2>把这场活动加入你的计划</h2>
+            <p class="muted">登录后可以标记想去、抽选中、已购票或已参加，并同步到系统日历。</p>
+          </div>
+          <button class="primary-button" type="button" @click="go('profile')">登录管理</button>
+        </section>
+
+        <section v-if="authUser" class="panel event-note-panel">
+          <div class="panel-head">
+            <h2>我的状态</h2>
+            <span class="muted">{{ eventNoteSaveState }}</span>
+          </div>
+          <form class="event-note-form" @submit.prevent="saveEventNote">
+            <label class="search-field">
+              <span>状态</span>
+              <select v-model="eventNoteStatus">
+                <option v-for="[value, label] in eventNoteStatusOptions" :key="value" :value="value">{{ label }}</option>
+              </select>
+            </label>
+            <label class="search-field event-note-memo">
+              <span>备注</span>
+              <textarea v-model="eventNoteMemo" rows="3" placeholder="票务、同行、交通、座位、现场注意点"></textarea>
+            </label>
+            <button class="secondary-button" type="submit">保存状态</button>
+          </form>
+        </section>
 
         <section class="panel detail-section">
           <div class="panel-head">
@@ -297,15 +376,17 @@ const template = `
             <span class="muted">{{ selectedEvent.artists.length.toLocaleString("ja-JP") }} 人 / 组</span>
           </div>
           <div class="performer-list">
-            <button v-for="artist in selectedEvent.artists" :key="artist" type="button" @click="openArtistByName(artist)">
+            <button v-for="artist in visibleEventArtists" :key="artist" type="button" @click="openArtistByName(artist)">
               {{ artist }}
             </button>
           </div>
+          <button v-if="selectedEvent.artists.length > collapsedArtistLimit" class="ghost-button performer-toggle" type="button" @click="showAllEventArtists = !showAllEventArtists">
+            {{ showAllEventArtists ? "收起出演者" : "展开全部 " + selectedEvent.artists.length.toLocaleString("ja-JP") + " 人 / 组" }}
+          </button>
         </section>
 
         <div class="detail-actions">
           <a class="primary-button link-button" :href="selectedEvent.sourceUrl" target="_blank" rel="noreferrer">打开 Eventernote</a>
-          <button class="secondary-button" type="button" @click="openEventVenue(selectedEvent)">同会场活动</button>
           <button v-if="isConcreteWorkTitle(selectedEvent.work)" class="ghost-button" type="button" @click="openEventWork(selectedEvent)">同作品活动</button>
         </div>
       </section>
@@ -424,6 +505,9 @@ const template = `
           <p class="eyebrow">{{ selectedArtist.role }}</p>
           <h2>{{ selectedArtist.name }}</h2>
         </div>
+        <button class="secondary-button" :class="{ joined: isEntityFavorite('artists', selectedArtist.name) }" type="button" @click="toggleEntityFavorite('artists', selectedArtist.name)">
+          {{ authUser ? (isEntityFavorite('artists', selectedArtist.name) ? "取消关注" : "关注出演者") : "登录后关注" }}
+        </button>
       </section>
       <section class="detail-grid">
         <div>
@@ -438,25 +522,43 @@ const template = `
       <section class="panel detail-section">
         <div class="panel-head">
           <h2>活动时间线</h2>
-          <span class="muted">{{ relatedEventTotal.toLocaleString("ja-JP") }} 场匹配</span>
+          <span class="muted">已载入 {{ relatedEvents.length.toLocaleString("ja-JP") }} / {{ relatedEventTotal.toLocaleString("ja-JP") }} 场</span>
         </div>
         <div class="timeline-filter" role="group" aria-label="活动类型筛选">
           <button v-for="[value, label] in typeOptions" :key="value" type="button" :class="{ active: relatedEventType === value }" @click="relatedEventType = value">
             {{ label }}
           </button>
         </div>
-        <div class="event-list compact">
-          <article v-for="event in relatedEvents" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
-            <div class="date-box">
-              <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
+        <div v-if="relatedEvents.length" class="related-timeline-groups">
+          <section v-for="group in relatedEventSections" :key="group.id" v-show="group.total > 0" class="related-timeline-group" :class="{ collapsed: group.collapsed }">
+            <button class="timeline-group-head" type="button" @click="toggleRelatedSection(group.id)">
+              <span class="collapse-mark">{{ group.collapsed ? "+" : "-" }}</span>
+              <h3>{{ group.label }}</h3>
+              <span>已载入 {{ group.items.length.toLocaleString("ja-JP") }} / {{ group.total.toLocaleString("ja-JP") }} 场</span>
+            </button>
+            <div v-if="!group.collapsed" class="event-list compact">
+              <article v-for="event in group.items" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
+                <div class="date-box timeline-date-box">
+                  <div>
+                    <small>{{ event.date.slice(0, 4) }}</small>
+                    <span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span>
+                    <strong>{{ formatDate(event.date).day }}</strong>
+                  </div>
+                </div>
+                <div>
+                  <h3 class="event-title">{{ event.title }}</h3>
+                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                </div>
+              </article>
             </div>
-            <div>
-              <h3 class="event-title">{{ event.title }}</h3>
-              <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+            <div v-if="!group.collapsed && group.hasMore" class="timeline-more">
+              <button class="secondary-button" type="button" :disabled="loadingRelated" @click="loadMoreRelatedEvents(group.id)">
+                {{ loadingRelated ? "加载中..." : "加载更多" + group.label }}
+              </button>
             </div>
-          </article>
-          <p v-if="relatedEvents.length === 0" class="muted">{{ loadingRelated ? "加载中..." : "没有匹配活动。" }}</p>
+          </section>
         </div>
+        <p v-if="!relatedEvents.length" class="muted">{{ loadingRelated ? "加载中..." : "没有匹配活动。" }}</p>
       </section>
       </template>
       <section v-else class="panel">
@@ -480,6 +582,9 @@ const template = `
           <h2>{{ selectedWork.title }}</h2>
           <p class="muted">{{ selectedWork.trend }}</p>
         </div>
+        <button class="secondary-button" :class="{ joined: isEntityFavorite('works', selectedWork.title) }" type="button" @click="toggleEntityFavorite('works', selectedWork.title)">
+          {{ authUser ? (isEntityFavorite('works', selectedWork.title) ? "取消关注" : "关注作品") : "登录后关注" }}
+        </button>
       </section>
       <section class="detail-grid">
         <div>
@@ -490,25 +595,43 @@ const template = `
       <section class="panel detail-section">
         <div class="panel-head">
           <h2>活动时间线</h2>
-          <span class="muted">{{ relatedEventTotal.toLocaleString("ja-JP") }} 场匹配</span>
+          <span class="muted">已载入 {{ relatedEvents.length.toLocaleString("ja-JP") }} / {{ relatedEventTotal.toLocaleString("ja-JP") }} 场</span>
         </div>
         <div class="timeline-filter" role="group" aria-label="活动类型筛选">
           <button v-for="[value, label] in typeOptions" :key="value" type="button" :class="{ active: relatedEventType === value }" @click="relatedEventType = value">
             {{ label }}
           </button>
         </div>
-        <div class="event-list compact">
-          <article v-for="event in relatedEvents" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
-            <div class="date-box">
-              <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
+        <div v-if="relatedEvents.length" class="related-timeline-groups">
+          <section v-for="group in relatedEventSections" :key="group.id" v-show="group.total > 0" class="related-timeline-group" :class="{ collapsed: group.collapsed }">
+            <button class="timeline-group-head" type="button" @click="toggleRelatedSection(group.id)">
+              <span class="collapse-mark">{{ group.collapsed ? "+" : "-" }}</span>
+              <h3>{{ group.label }}</h3>
+              <span>已载入 {{ group.items.length.toLocaleString("ja-JP") }} / {{ group.total.toLocaleString("ja-JP") }} 场</span>
+            </button>
+            <div v-if="!group.collapsed" class="event-list compact">
+              <article v-for="event in group.items" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
+                <div class="date-box timeline-date-box">
+                  <div>
+                    <small>{{ event.date.slice(0, 4) }}</small>
+                    <span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span>
+                    <strong>{{ formatDate(event.date).day }}</strong>
+                  </div>
+                </div>
+                <div>
+                  <h3 class="event-title">{{ event.title }}</h3>
+                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                </div>
+              </article>
             </div>
-            <div>
-              <h3 class="event-title">{{ event.title }}</h3>
-              <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+            <div v-if="!group.collapsed && group.hasMore" class="timeline-more">
+              <button class="secondary-button" type="button" :disabled="loadingRelated" @click="loadMoreRelatedEvents(group.id)">
+                {{ loadingRelated ? "加载中..." : "加载更多" + group.label }}
+              </button>
             </div>
-          </article>
-          <p v-if="relatedEvents.length === 0" class="muted">{{ loadingRelated ? "加载中..." : "没有匹配活动。" }}</p>
+          </section>
         </div>
+        <p v-if="!relatedEvents.length" class="muted">{{ loadingRelated ? "加载中..." : "没有匹配活动。" }}</p>
       </section>
       </template>
       <section v-else class="panel">
@@ -531,6 +654,9 @@ const template = `
           <p class="eyebrow">{{ selectedVenue.area }}</p>
           <h2>{{ displayVenue(selectedVenue.name) }}</h2>
         </div>
+        <button class="secondary-button" :class="{ joined: isEntityFavorite('venues', selectedVenue.id) }" type="button" @click="toggleEntityFavorite('venues', selectedVenue.id)">
+          {{ authUser ? (isEntityFavorite('venues', selectedVenue.id) ? "取消关注" : "关注会场") : "登录后关注" }}
+        </button>
       </section>
       <section class="detail-grid">
         <div>
@@ -544,35 +670,445 @@ const template = `
       </section>
       <div class="detail-actions">
         <a v-if="selectedVenue.sourceUrl" class="ghost-button link-button" :href="selectedVenue.sourceUrl" target="_blank" rel="noreferrer">打开来源</a>
+        <a class="secondary-button link-button" :href="mapUrlForVenue(selectedVenue.name)" target="_blank" rel="noreferrer">打开地图</a>
       </div>
       <section class="panel detail-section">
         <div class="panel-head">
           <h2>活动时间线</h2>
-          <span class="muted">{{ relatedEventTotal.toLocaleString("ja-JP") }} 场匹配</span>
+          <span class="muted">已载入 {{ relatedEvents.length.toLocaleString("ja-JP") }} / {{ relatedEventTotal.toLocaleString("ja-JP") }} 场</span>
         </div>
         <div class="timeline-filter" role="group" aria-label="活动类型筛选">
           <button v-for="[value, label] in typeOptions" :key="value" type="button" :class="{ active: relatedEventType === value }" @click="relatedEventType = value">
             {{ label }}
           </button>
         </div>
-        <div class="event-list compact">
-          <article v-for="event in relatedEvents" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
-            <div class="date-box">
-              <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
+        <div v-if="relatedEvents.length" class="related-timeline-groups">
+          <section v-for="group in relatedEventSections" :key="group.id" v-show="group.total > 0" class="related-timeline-group" :class="{ collapsed: group.collapsed }">
+            <button class="timeline-group-head" type="button" @click="toggleRelatedSection(group.id)">
+              <span class="collapse-mark">{{ group.collapsed ? "+" : "-" }}</span>
+              <h3>{{ group.label }}</h3>
+              <span>已载入 {{ group.items.length.toLocaleString("ja-JP") }} / {{ group.total.toLocaleString("ja-JP") }} 场</span>
+            </button>
+            <div v-if="!group.collapsed" class="event-list compact">
+              <article v-for="event in group.items" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
+                <div class="date-box timeline-date-box">
+                  <div>
+                    <small>{{ event.date.slice(0, 4) }}</small>
+                    <span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span>
+                    <strong>{{ formatDate(event.date).day }}</strong>
+                  </div>
+                </div>
+                <div>
+                  <h3 class="event-title">{{ event.title }}</h3>
+                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                </div>
+              </article>
             </div>
-            <div>
-              <h3 class="event-title">{{ event.title }}</h3>
-              <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+            <div v-if="!group.collapsed && group.hasMore" class="timeline-more">
+              <button class="secondary-button" type="button" :disabled="loadingRelated" @click="loadMoreRelatedEvents(group.id)">
+                {{ loadingRelated ? "加载中..." : "加载更多" + group.label }}
+              </button>
             </div>
-          </article>
-          <p v-if="relatedEvents.length === 0" class="muted">{{ loadingRelated ? "加载中..." : "没有匹配活动。" }}</p>
+          </section>
         </div>
+        <p v-if="!relatedEvents.length" class="muted">{{ loadingRelated ? "加载中..." : "没有匹配活动。" }}</p>
       </section>
       </template>
       <section v-else class="panel">
         <h2>还没有选择会场</h2>
         <button class="primary-button" type="button" @click="go('venues')">去会场列表</button>
       </section>
+    </section>
+
+    <section v-if="page === 'favorites'" class="page-view favorites-page">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">My events</p>
+          <h1>我的活动</h1>
+        </div>
+        <button v-if="authUser && favoriteItems.length > 0" class="ghost-button" type="button" @click="go('events')">找活动</button>
+      </div>
+
+      <section v-if="!authUser" class="panel empty-state">
+        <h2>登录后查看我的活动</h2>
+        <p class="muted">收藏活动、关注出演者和作品后，会在这里汇总成你的参战计划。</p>
+        <div class="empty-feature-grid">
+          <div><strong>状态管理</strong><span>想去、抽选中、已购票、已参加</span></div>
+          <div><strong>日历同步</strong><span>把收藏活动订阅到手机系统日历</span></div>
+          <div><strong>关注追踪</strong><span>按出演者、作品和会场汇总新活动</span></div>
+        </div>
+        <button class="primary-button" type="button" @click="go('profile')">去登录</button>
+      </section>
+
+      <div v-if="authUser" class="my-tabs compact" role="tablist" aria-label="我的页面分区">
+        <button type="button" :class="{ active: mySection === 'calendar' }" @click="mySection = 'calendar'">日历</button>
+        <button type="button" :class="{ active: mySection === 'follows' }" @click="mySection = 'follows'">关注</button>
+      </div>
+
+      <section v-if="authUser && mySection === 'follows'" class="panel follow-panel">
+        <div class="panel-head">
+          <h2>关注</h2>
+          <span class="muted">{{ followedEntityCount }} 个收藏对象</span>
+        </div>
+        <div class="follow-grid">
+          <section>
+            <h3>出演者</h3>
+            <button v-for="artist in favoriteArtists" :key="artist.name" type="button" @click="openArtist(artist)">{{ artist.name }}</button>
+            <p v-if="favoriteArtists.length === 0" class="muted">还没有关注出演者。</p>
+          </section>
+          <section>
+            <h3>作品</h3>
+            <button v-for="work in favoriteWorks" :key="work.title" type="button" @click="openWork(work)">{{ work.title }}</button>
+            <p v-if="favoriteWorks.length === 0" class="muted">还没有关注作品。</p>
+          </section>
+          <section>
+            <h3>会场</h3>
+            <button v-for="venue in favoriteVenues" :key="venue.id" type="button" @click="openVenue(venue)">{{ displayVenue(venue.name) }}</button>
+            <p v-if="favoriteVenues.length === 0" class="muted">还没有关注会场。</p>
+          </section>
+        </div>
+      </section>
+
+      <section v-if="authUser && mySection === 'calendar' && favoriteItems.length === 0" class="panel empty-state">
+        <h2>还没有收藏活动</h2>
+        <p class="muted">在活动详情页点“加入我的活动”，这里会自动按日期汇总，并可生成系统日历订阅。</p>
+        <div class="empty-feature-grid">
+          <div><strong>先找活动</strong><span>从日历筛选日期、地区和类型</span></div>
+          <div><strong>再做判断</strong><span>看出演者、会场、票务和官网</span></div>
+          <div><strong>最后管理</strong><span>记录票务状态、备注和日程</span></div>
+        </div>
+        <button class="primary-button" type="button" @click="go('events')">浏览活动</button>
+      </section>
+
+      <section v-if="authUser && mySection === 'calendar' && favoriteItems.length > 0" class="favorite-layout">
+        <section class="calendar-panel favorite-calendar-panel">
+          <div class="calendar-head">
+            <button class="icon-button" type="button" aria-label="上个月" @click="changeFavoriteMonth(-1)">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+            </button>
+            <div>
+              <p class="eyebrow">Saved events</p>
+              <div class="calendar-title-row">
+                <label class="compact-year-select" aria-label="选择收藏月份">
+                  <select :value="favoriteMonth" @change="setFavoriteMonth($event.target.value)">
+                    <option v-for="month in favoriteMonthOptions" :key="month" :value="month">{{ monthLabel(month) }}</option>
+                  </select>
+                </label>
+              </div>
+              <p class="muted">本月 {{ favoriteMonthTotal }} 场收藏</p>
+            </div>
+            <button class="icon-button" type="button" aria-label="下个月" @click="changeFavoriteMonth(1)">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
+            </button>
+          </div>
+          <div class="calendar-weekdays">
+            <span v-for="day in weekdays" :key="day">{{ day }}</span>
+          </div>
+          <div class="calendar-grid favorite-calendar-grid">
+            <button
+              v-for="day in favoriteCalendarCells"
+              :key="day.key"
+              class="calendar-day favorite-calendar-day"
+              :class="{ muted: !day.inMonth, active: day.date === favoriteSelectedDate, hasEvents: day.count > 0 }"
+              type="button"
+              @click="selectFavoriteDate(day.date)"
+            >
+              <span>{{ day.day }}</span>
+              <strong v-if="day.count > 0">{{ day.count }}</strong>
+              <small v-if="day.samples.length">{{ day.samples[0].title }}</small>
+            </button>
+          </div>
+        </section>
+
+        <section class="panel calendar-sync-panel">
+          <div>
+            <h2>系统日历同步</h2>
+            <p class="muted">把已收藏活动同步到手机系统日历。</p>
+          </div>
+          <div class="calendar-sync-actions">
+            <a v-if="calendarFeedUrl" class="secondary-button link-button" :href="calendarWebcalUrl || calendarFeedUrl">订阅</a>
+            <a v-if="calendarFeedUrl" class="ghost-button link-button" :href="calendarFeedUrl" download="otakuevents.ics">下载 .ics</a>
+            <button v-else class="secondary-button" type="button" @click="loadCalendarFeed">生成链接</button>
+          </div>
+        </section>
+
+        <section class="favorite-timeline">
+          <div class="section-head day-head">
+            <div>
+              <p class="eyebrow">Saved events</p>
+              <h2>{{ favoriteSelectedDateLabel }}</h2>
+            </div>
+            <span class="muted">{{ selectedFavoriteItems.length }} 场</span>
+          </div>
+          <p v-if="selectedFavoriteItems.length === 0" class="panel muted">这一天没有收藏活动。</p>
+          <div v-else class="event-list compact">
+            <article v-for="event in selectedFavoriteItems" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
+              <div class="date-box">
+                <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
+              </div>
+              <div>
+                <h3 class="event-title">{{ event.title }}</h3>
+                <div class="event-meta">
+                  <span>{{ displayVenue(event.venue) }}</span>
+                  <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
+                </div>
+              </div>
+              <button class="secondary-button join-button joined" type="button" @click.stop="toggleJoin(event)">取消</button>
+            </article>
+          </div>
+        </section>
+      </section>
+    </section>
+
+    <section v-if="page === 'profile'" class="page-view profile-page" :class="{ 'profile-edit-page': isProfileEditPage }">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">{{ isProfileEditPage ? "Profile editor" : "Profile" }}</p>
+          <h1>{{ isProfileEditPage ? "编辑个人主页" : "个人资料" }}</h1>
+        </div>
+        <button v-if="isProfileEditPage" class="ghost-button" type="button" @click="go('profile')">返回主页</button>
+        <button v-else class="ghost-button" type="button" @click="go('favorites')">回到我的</button>
+      </div>
+
+      <section v-if="!authUser" class="panel auth-panel">
+        <div class="panel-head">
+          <h2>{{ authMode === "login" ? "登录" : "创建账号" }}</h2>
+          <div class="auth-switch">
+            <button type="button" :class="{ active: authMode === 'login' }" @click="authMode = 'login'">登录</button>
+            <button type="button" :class="{ active: authMode === 'register' }" @click="authMode = 'register'">注册</button>
+          </div>
+        </div>
+        <form class="auth-form" @submit.prevent="submitAuth">
+          <label class="search-field">
+            <span>用户名</span>
+            <input v-model="authUsername" autocomplete="username" placeholder="event_user">
+          </label>
+          <label v-if="authMode === 'register'" class="search-field">
+            <span>显示名</span>
+            <input v-model="authDisplayName" autocomplete="name" placeholder="活动记录者">
+          </label>
+          <label class="search-field">
+            <span>密码</span>
+            <input v-model="authPassword" type="password" autocomplete="current-password" placeholder="至少 8 位">
+          </label>
+          <p v-if="authError" class="load-error">{{ authError }}</p>
+          <button class="primary-button" type="submit" :disabled="authLoading">
+            {{ authLoading ? "处理中..." : authMode === "login" ? "登录" : "创建账号" }}
+          </button>
+        </form>
+        <div class="auth-benefits">
+          <div><strong>我的活动</strong><span>收藏后按日期自动成表</span></div>
+          <div><strong>参战状态</strong><span>记录抽选、购票和备注</span></div>
+          <div><strong>日历订阅</strong><span>同步到手机或桌面日历</span></div>
+        </div>
+      </section>
+
+      <template v-else>
+        <section v-if="!isProfileEditPage" class="profile-link-card">
+          <div class="profile-cover">
+            <span class="avatar profile-avatar">
+              <img v-if="profileAvatarUrl" :src="profileAvatarUrl" alt="个人头像">
+              <span v-else>{{ profileDisplayName.slice(0, 1) || authUser.displayName.slice(0, 1) }}</span>
+            </span>
+            <div>
+              <p class="eyebrow">Activity profile</p>
+              <h2>{{ profileDisplayName || authUser.displayName }}</h2>
+              <p class="profile-handle">@{{ authUser.username }}</p>
+            </div>
+            <div class="profile-cover-actions">
+              <button class="primary-button" type="button" @click="openProfileEditor">编辑主页</button>
+              <button class="secondary-button" type="button" @click="logout" :disabled="authLoading">退出登录</button>
+            </div>
+          </div>
+          <div v-if="profileCoverUrl" class="profile-cover-image">
+            <img :src="profileCoverUrl" alt="个人主页封面">
+          </div>
+          <p class="profile-status">{{ profileStatusLine || "编辑一句话状态，让这里更像你的活动主页。" }}</p>
+          <p class="profile-bio">{{ profileBio || "写下喜欢的活动、声优、作品，或最近的参战计划。" }}</p>
+          <div class="profile-chip-row">
+            <span v-if="profileHomeArea">常驻 {{ profileHomeArea }}</span>
+            <span>{{ typeLabel(profileFavoriteType) }}</span>
+            <span>{{ favoriteItems.length.toLocaleString("ja-JP") }} 个活动</span>
+            <span>{{ followedEntityCount.toLocaleString("ja-JP") }} 个关注</span>
+          </div>
+          <div class="profile-tag-row">
+            <span v-for="tag in profileTagRows" :key="tag">{{ tag }}</span>
+            <span v-if="profileTagRows.length === 0">#声优活动</span>
+            <span v-if="profileTagRows.length === 0">#Live</span>
+            <span v-if="profileTagRows.length === 0">#遠征計画</span>
+          </div>
+          <div class="profile-link-list">
+            <a v-for="link in profileLinkRows" :key="link.url" :href="link.url" target="_blank" rel="noreferrer">
+              <strong>{{ link.label }}</strong>
+              <span>{{ link.url }}</span>
+            </a>
+            <div v-if="profileLinkRows.length === 0" class="profile-link-placeholder">
+              <strong>外部链接</strong>
+              <span>X / Instagram / YouTube / GitHub / 个人站，都可以在下方编辑。</span>
+            </div>
+          </div>
+          <div class="profile-contact-list">
+            <button v-for="contact in profileContactRows" :key="contact.label + contact.value" type="button" @click="copyProfileContact(contact.value)">
+              <strong>{{ contact.label }}</strong>
+              <span>{{ contact.value }}</span>
+            </button>
+            <p v-if="profileContactRows.length === 0" class="muted">可以添加 QQ、邮箱、P-ID 或其他常用联系方式。</p>
+          </div>
+          <p v-if="profileCopyState" class="copy-state">{{ profileCopyState }}</p>
+        </section>
+
+        <section v-if="!isProfileEditPage" class="profile-dashboard">
+          <section class="profile-summary">
+            <div class="metric"><span>收藏活动</span><strong>{{ favoriteItems.length.toLocaleString("ja-JP") }}</strong></div>
+            <div class="metric"><span>关注对象</span><strong>{{ followedEntityCount.toLocaleString("ja-JP") }}</strong></div>
+            <div class="metric"><span>即将到来</span><strong>{{ upcomingFavoriteItems.length.toLocaleString("ja-JP") }}</strong></div>
+          </section>
+          <section class="panel profile-preview-section">
+            <div class="panel-head">
+              <h2>活动身份</h2>
+            </div>
+            <div class="profile-identity-grid">
+              <div>
+                <span>下一场计划</span>
+                <strong>{{ nextPlanLabel }}</strong>
+              </div>
+              <div>
+                <span>偏好类型</span>
+                <strong>{{ typeLabel(profileFavoriteType) }}</strong>
+              </div>
+              <div>
+                <span>常驻地区</span>
+                <strong>{{ profileHomeArea || "未设置" }}</strong>
+              </div>
+            </div>
+          </section>
+          <section class="panel profile-preview-section">
+            <div class="panel-head">
+              <h2>兴趣与推し</h2>
+            </div>
+            <div v-if="profileInterestGroups.length" class="profile-interest-tabs" role="tablist" aria-label="兴趣分类">
+              <button
+                v-for="group in profileInterestGroups"
+                :key="group.category"
+                type="button"
+                :class="{ active: (activeProfileInterest || profileInterestGroups[0]?.category) === group.category }"
+                @click="activeProfileInterest = group.category"
+              >
+                {{ group.category }}
+              </button>
+            </div>
+            <div v-if="activeProfileInterestItems.length" class="profile-interest-grid">
+              <article v-for="item in activeProfileInterestItems" :key="item.category + item.title" class="profile-interest-card">
+                <div v-if="item.imageUrl" class="profile-interest-media">
+                  <img :src="item.imageUrl" :alt="item.title">
+                </div>
+                <span>{{ item.category }}</span>
+                <strong>{{ item.title }}</strong>
+                <p>{{ item.note || "还没有说明。" }}</p>
+              </article>
+            </div>
+            <div v-else class="profile-link-placeholder">
+              <strong>兴趣展示</strong>
+              <span>把喜欢的作品、声优、角色、歌手或会场加进来，个人主页会按分类展示。</span>
+            </div>
+          </section>
+        </section>
+
+        <section v-if="isProfileEditPage" class="panel profile-settings profile-editor">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Profile settings</p>
+              <h2>主页内容</h2>
+            </div>
+            <div class="editor-actions">
+              <span class="muted">{{ profileSaveState }}</span>
+              <button class="ghost-button" type="button" @click="go('profile')">取消</button>
+            </div>
+          </div>
+          <form class="profile-form" @submit.prevent>
+            <label class="search-field">
+              <span>昵称</span>
+              <input v-model="profileDisplayName" autocomplete="name" placeholder="活动记录者">
+            </label>
+            <label class="search-field">
+              <span>常驻地区</span>
+              <input v-model="profileHomeArea" placeholder="东京 / 神奈川 / 大阪">
+            </label>
+            <label class="search-field">
+              <span>一句话状态</span>
+              <input v-model="profileStatusLine" placeholder="5月远征计划整理中">
+            </label>
+            <label class="search-field">
+              <span>头像图片 URL</span>
+              <input v-model="profileAvatarUrl" placeholder="https://example.com/avatar.jpg">
+            </label>
+            <label class="search-field">
+              <span>封面图片 URL</span>
+              <input v-model="profileCoverUrl" placeholder="https://example.com/cover.jpg">
+            </label>
+            <label class="search-field">
+              <span>偏好类型</span>
+              <select v-model="profileFavoriteType">
+                <option v-for="[value, label] in typeOptions" :key="value" :value="value">{{ label }}</option>
+              </select>
+            </label>
+            <label class="search-field profile-bio-field">
+              <span>主页介绍</span>
+              <textarea v-model="profileBio" rows="3" placeholder="喜欢的声优、作品、活动风格"></textarea>
+            </label>
+            <label class="search-field profile-bio-field">
+              <span>标签</span>
+              <div class="chip-editor">
+                <div class="profile-tag-row">
+                  <button v-for="tag in profileTagRows" :key="tag" type="button" @click="removeProfileTag(tag)">{{ tag }} x</button>
+                </div>
+                <div class="inline-editor-row">
+                  <input v-model="profileTagInput" placeholder="声优活动 / Live / 远征计划" @keydown.enter.prevent="addProfileTag">
+                  <button class="secondary-button" type="button" @click="addProfileTag">添加标签</button>
+                </div>
+              </div>
+            </label>
+            <label class="search-field profile-bio-field">
+              <span>外部链接</span>
+              <div class="link-editor">
+                <div v-for="(link, index) in profileLinkDraftRows" :key="index" class="link-editor-row">
+                  <input v-model="link.label" placeholder="X / GitHub / Blog">
+                  <input v-model="link.url" placeholder="https://">
+                  <button class="ghost-button" type="button" @click="removeProfileLink(index)">删除</button>
+                </div>
+                <button class="secondary-button" type="button" @click="addProfileLink">添加链接</button>
+              </div>
+            </label>
+            <label class="search-field profile-bio-field">
+              <span>可复制联系方式</span>
+              <div class="link-editor">
+                <div v-for="(contact, index) in profileContactDraftRows" :key="index" class="link-editor-row contact-editor-row">
+                  <input v-model="contact.label" placeholder="QQ / P-ID / Email">
+                  <input v-model="contact.value" placeholder="example@example.com">
+                  <button class="ghost-button" type="button" @click="removeProfileContact(index)">删除</button>
+                </div>
+                <button class="secondary-button" type="button" @click="addProfileContact">添加联系方式</button>
+              </div>
+            </label>
+            <label class="search-field profile-bio-field">
+              <span>兴趣分类</span>
+              <div class="interest-editor">
+                <div v-for="(item, index) in profileInterestDraftRows" :key="index" class="interest-editor-row">
+                  <input v-model="item.category" placeholder="作品 / 出演者 / 音乐">
+                  <input v-model="item.title" placeholder="喜欢的作品、组合或会场">
+                  <input v-model="item.imageUrl" placeholder="图片 URL">
+                  <textarea v-model="item.note" rows="2" placeholder="为什么喜欢、最近关注什么"></textarea>
+                  <button class="ghost-button" type="button" @click="removeProfileInterest(index)">删除</button>
+                </div>
+                <button class="secondary-button" type="button" @click="addProfileInterest">添加兴趣</button>
+              </div>
+            </label>
+            <div class="profile-editor-submit">
+              <button class="primary-button" type="button" @click="saveProfile">保存并返回主页</button>
+            </div>
+          </form>
+        </section>
+      </template>
     </section>
 
     <section v-if="page === 'notebook'" class="page-view notebook-page">
@@ -593,61 +1129,6 @@ const template = `
         </label>
         <button class="secondary-button" type="button" @click="saveMemo">保存笔记</button>
         <p class="save-state" aria-live="polite">{{ saveState }}</p>
-      </section>
-    </section>
-
-    <section v-if="page === 'account'" class="page-view event-detail-page">
-      <div class="page-title">
-        <div>
-          <p class="eyebrow">Account</p>
-          <h1>账号</h1>
-        </div>
-      </div>
-
-      <section v-if="authUser" class="panel auth-panel">
-        <div class="panel-head">
-          <h2>{{ authUser.displayName }}</h2>
-          <span class="muted">@{{ authUser.username }}</span>
-        </div>
-        <div class="detail-grid">
-          <div>
-            <span>登录状态</span>
-            <strong>已登录</strong>
-          </div>
-          <div>
-            <span>账号 ID</span>
-            <strong>{{ authUser.id }}</strong>
-          </div>
-        </div>
-        <button class="secondary-button" type="button" @click="logout" :disabled="authLoading">退出登录</button>
-      </section>
-
-      <section v-else class="panel auth-panel">
-        <div class="panel-head">
-          <h2>{{ authMode === "login" ? "登录" : "注册" }}</h2>
-          <div class="auth-switch">
-            <button type="button" :class="{ active: authMode === 'login' }" @click="authMode = 'login'">登录</button>
-            <button type="button" :class="{ active: authMode === 'register' }" @click="authMode = 'register'">注册</button>
-          </div>
-        </div>
-        <form class="auth-form" @submit.prevent="submitAuth">
-          <label class="search-field">
-            <span>用户名</span>
-            <input v-model="authUsername" autocomplete="username" placeholder="asabu_mai">
-          </label>
-          <label v-if="authMode === 'register'" class="search-field">
-            <span>显示名</span>
-            <input v-model="authDisplayName" autocomplete="name" placeholder="麻布舞">
-          </label>
-          <label class="search-field">
-            <span>密码</span>
-            <input v-model="authPassword" type="password" autocomplete="current-password" placeholder="至少 8 位">
-          </label>
-          <p v-if="authError" class="load-error">{{ authError }}</p>
-          <button class="primary-button" type="submit" :disabled="authLoading">
-            {{ authLoading ? "处理中..." : authMode === "login" ? "登录" : "创建账号" }}
-          </button>
-        </form>
       </section>
     </section>
 
@@ -697,12 +1178,12 @@ createApp({
       { id: "artists", label: "出演者", short: "出演" },
       { id: "works", label: "作品", short: "作品" },
       { id: "venues", label: "会场", short: "会场" },
-      { id: "notebook", label: "笔记", short: "笔记" },
-      { id: "account", label: "账号", short: "账号" },
-      { id: "sources", label: "来源", short: "来源" }
+      { id: "sources", label: "来源", short: "来源" },
+      { id: "favorites", label: "我的", short: "我的" }
     ];
 
     const page = ref(routePageFromHash());
+    const routeParam = ref(routeParamFromHash());
     const query = ref("");
     const city = ref("all");
     const cityOptions = ref(defaultCityOptions);
@@ -718,12 +1199,52 @@ createApp({
     const authPassword = ref("");
     const authError = ref("");
     const authLoading = ref(false);
+    const profileDisplayName = ref("");
+    const profileHomeArea = ref("");
+    const profileFavoriteType = ref("all");
+    const profileAvatarUrl = ref("");
+    const profileCoverUrl = ref("");
+    const profileStatusLine = ref("");
+    const profileBio = ref("");
+    const profileLinks = ref("");
+    const profileLinkDraftRows = ref([]);
+    const profileTags = ref("");
+    const profileTagInput = ref("");
+    const profileContacts = ref("");
+    const profileContactDraftRows = ref([]);
+    const profileInterests = ref("");
+    const profileInterestDraftRows = ref([]);
+    const activeProfileInterest = ref("");
+    const profileCopyState = ref("");
+    const profileSaveState = ref("");
+    const mySection = ref("calendar");
+    const eventNoteStatus = ref("want");
+    const eventNoteMemo = ref("");
+    const eventNoteSaveState = ref("");
+    const showAllEventArtists = ref(false);
+    const calendarFeedUrl = ref("");
+    const calendarWebcalUrl = ref("");
+    const eventExtra = ref({});
+    const eventExtraOpenTime = ref("");
+    const eventExtraStartTime = ref("");
+    const eventExtraOfficialUrl = ref("");
+    const eventExtraTicketUrl = ref("");
+    const eventExtraPrice = ref("");
+    const eventExtraTicketInfo = ref("");
+    const eventExtraSaveState = ref("");
+    const collapsedArtistLimit = 12;
     const events = ref([]);
     const dayEvents = ref([]);
-    const relatedEvents = ref([]);
-    const relatedEventTotal = ref(0);
+    const relatedUpcomingEvents = ref([]);
+    const relatedEndedEvents = ref([]);
+    const relatedUpcomingTotal = ref(0);
+    const relatedEndedTotal = ref(0);
+    const relatedUpcomingPage = ref(1);
+    const relatedEndedPage = ref(1);
     const relatedEventType = ref("all");
     const loadingRelated = ref(false);
+    const relatedEventLimit = 100;
+    const collapsedRelatedSections = ref(new Set(["ended"]));
     const querySuggestions = ref([]);
     const directorySuggestions = ref([]);
     const showQuerySuggestions = ref(false);
@@ -748,10 +1269,18 @@ createApp({
     const selectedDate = ref(initialDate);
     const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
     const followedCount = computed(() => artistRows.value.length);
-    const joinedEvents = ref(new Set([
-      "ラブライブ！虹ヶ咲 学园偶像同好会 Fan Meeting",
-      "声優ラジオ 公開収録 Vol.18"
-    ]));
+    const favoriteIds = ref(new Set());
+    const favoriteItems = ref([]);
+    const favoriteEntityIds = ref({
+      artists: new Set(),
+      works: new Set(),
+      venues: new Set()
+    });
+    const favoriteArtists = ref([]);
+    const favoriteWorks = ref([]);
+    const favoriteVenues = ref([]);
+    const favoriteMonth = ref(initialDate.slice(0, 7));
+    const favoriteSelectedDate = ref(initialDate);
 
     const dataSources = computed(() => [
       {
@@ -791,7 +1320,153 @@ createApp({
       return "";
     });
 
-    const plannedCount = computed(() => joinedEvents.value.size);
+    const plannedCount = computed(() => favoriteIds.value.size);
+    const followedEntityCount = computed(() => favoriteArtists.value.length + favoriteWorks.value.length + favoriteVenues.value.length);
+    const isAccountPage = computed(() => false);
+    const upcomingFavoriteItems = computed(() => {
+      return favoriteItems.value
+        .filter((event) => event.date && event.date >= initialDate)
+        .slice()
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(0, 5);
+    });
+    const homeEvents = computed(() => {
+      return authUser.value && upcomingFavoriteItems.value.length
+        ? upcomingFavoriteItems.value
+        : dayEvents.value.slice(0, 5);
+    });
+    const nextPlanLabel = computed(() => {
+      const next = upcomingFavoriteItems.value[0];
+      if (!next) return favoriteItems.value.length ? "整理已收藏活动" : "收藏第一场活动";
+      return `${next.date.slice(5).replace("-", "/")} ${next.title}`;
+    });
+    const eventNoteStatusLabel = computed(() => {
+      return eventNoteStatusOptions.find(([value]) => value === eventNoteStatus.value)?.[1] || "想去";
+    });
+    const profileTagRows = computed(() => {
+      return profileTags.value
+        .split(/[\n,，、]/)
+        .map((tag) => tag.trim().replace(/^#/, ""))
+        .filter(Boolean)
+        .slice(0, 12)
+        .map((tag) => `#${tag}`);
+    });
+    const profileLinkRows = computed(() => {
+      return profileLinks.value
+        .split("\n")
+        .map(parseProfileLink)
+        .filter(Boolean)
+        .slice(0, 8);
+    });
+    const profileContactRows = computed(() => {
+      return profileContacts.value
+        .split("\n")
+        .map(parseLabelValueRow)
+        .filter(Boolean)
+        .slice(0, 8);
+    });
+    const profileInterestRows = computed(() => {
+      return profileInterests.value
+        .split("\n")
+        .map(parseInterestRow)
+        .filter(Boolean)
+        .slice(0, 24);
+    });
+    const profileInterestGroups = computed(() => {
+      const groups = new Map();
+      for (const row of profileInterestRows.value) {
+        if (!groups.has(row.category)) groups.set(row.category, []);
+        groups.get(row.category).push(row);
+      }
+      return [...groups.entries()].map(([category, items]) => ({ category, items }));
+    });
+    const activeProfileInterestItems = computed(() => {
+      const active = activeProfileInterest.value || profileInterestGroups.value[0]?.category || "";
+      return profileInterestGroups.value.find((group) => group.category === active)?.items || [];
+    });
+    const isProfileEditPage = computed(() => page.value === "profile" && routeParam.value === "edit");
+    const actionInfoSummary = computed(() => {
+      if (eventExtra.value.price) return `票价：${eventExtra.value.price}`;
+      if (eventExtra.value.ticketUrl && eventExtra.value.officialUrl) return "官网和票务链接已补充，可直接从顶部操作区打开。";
+      if (eventExtra.value.ticketUrl) return "票务链接已补充，可直接从顶部操作区打开。";
+      if (eventExtra.value.officialUrl) return "官网链接已补充，可直接从顶部操作区打开。";
+      if (eventExtra.value.ticketInfo) return "已有票务说明，详情见活动补充。";
+      return "官网、票务、票价会优先展示在这里。";
+    });
+    const favoriteEventsByDate = computed(() => {
+      const groups = new Map();
+      for (const event of favoriteItems.value) {
+        const date = event.date || "未定";
+        if (!groups.has(date)) groups.set(date, []);
+        groups.get(date).push(event);
+      }
+      return groups;
+    });
+    const favoriteCalendarTitle = computed(() => {
+      const [year, month] = favoriteMonth.value.split("-");
+      return `${year}年${Number(month)}月`;
+    });
+    const favoriteMonthOptions = computed(() => {
+      return [...new Set(favoriteItems.value.map((event) => event.date?.slice(0, 7)).filter(Boolean))]
+        .sort((a, b) => b.localeCompare(a));
+    });
+    const favoriteCalendarCells = computed(() => {
+      const [year, month] = favoriteMonth.value.split("-").map(Number);
+      const first = new Date(year, month - 1, 1);
+      const start = new Date(first);
+      start.setDate(start.getDate() - start.getDay());
+      return Array.from({ length: 42 }, (_, index) => {
+        const date = new Date(start);
+        date.setDate(start.getDate() + index);
+        const iso = toDateKey(date);
+        const items = favoriteEventsByDate.value.get(iso) || [];
+        return {
+          key: iso,
+          date: iso,
+          day: date.getDate(),
+          inMonth: date.getMonth() === month - 1,
+          count: items.length,
+          samples: items.slice(0, 1)
+        };
+      });
+    });
+    const favoriteMonthTotal = computed(() => favoriteItems.value.filter((event) => event.date?.startsWith(favoriteMonth.value)).length);
+    const selectedFavoriteItems = computed(() => favoriteEventsByDate.value.get(favoriteSelectedDate.value) || []);
+    const favoriteSelectedDateLabel = computed(() => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(favoriteSelectedDate.value)) return "选择日期";
+      return formatDetailDate(favoriteSelectedDate.value);
+    });
+    const visibleEventArtists = computed(() => {
+      const artists = selectedEvent.value?.artists || [];
+      return showAllEventArtists.value ? artists : artists.slice(0, collapsedArtistLimit);
+    });
+    const relatedEvents = computed(() => [...relatedUpcomingEvents.value, ...relatedEndedEvents.value]);
+    const relatedEventTotal = computed(() => relatedUpcomingTotal.value + relatedEndedTotal.value);
+    const relatedEventSections = computed(() => [
+      {
+        id: "upcoming",
+        label: "未开活动",
+        items: relatedUpcomingEvents.value,
+        total: relatedUpcomingTotal.value,
+        collapsed: collapsedRelatedSections.value.has("upcoming"),
+        hasMore: relatedUpcomingEvents.value.length < relatedUpcomingTotal.value
+      },
+      {
+        id: "ended",
+        label: "已开活动",
+        items: relatedEndedEvents.value,
+        total: relatedEndedTotal.value,
+        collapsed: collapsedRelatedSections.value.has("ended"),
+        hasMore: relatedEndedEvents.value.length < relatedEndedTotal.value
+      }
+    ]);
+    const eventNoteStatusOptions = [
+      ["want", "想去"],
+      ["ticketing", "抽选/购票中"],
+      ["going", "已决定参加"],
+      ["done", "已参加"],
+      ["skip", "放弃"]
+    ];
     const artistHistoricalTotal = computed(() => Math.max(selectedArtist.value?.follows || 0, relatedEventTotal.value || 0));
     const venueHistoricalTotal = computed(() => Math.max(selectedVenue.value?.events || 0, relatedEventTotal.value || 0));
     const eventBackLabel = computed(() => {
@@ -919,6 +1594,72 @@ createApp({
       if (!sourceEventId) return;
       const payload = await getJson(`/api/event?sourceEventId=${encodeURIComponent(sourceEventId)}`);
       selectedEvent.value = payload.item;
+      showAllEventArtists.value = false;
+      loadEventNote().catch(console.error);
+      loadEventExtra().catch(console.error);
+    }
+
+    async function loadEventExtra() {
+      if (!selectedEvent.value?.sourceEventId) {
+        applyEventExtra({});
+        return;
+      }
+      const payload = await getJson(`/api/event-extra?sourceEventId=${encodeURIComponent(selectedEvent.value.sourceEventId)}`);
+      applyEventExtra(payload.extra || {});
+    }
+
+    function applyEventExtra(extra) {
+      eventExtra.value = extra || {};
+      eventExtraOpenTime.value = eventExtra.value.openTime || "";
+      eventExtraStartTime.value = eventExtra.value.startTime || "";
+      eventExtraOfficialUrl.value = eventExtra.value.officialUrl || "";
+      eventExtraTicketUrl.value = eventExtra.value.ticketUrl || "";
+      eventExtraPrice.value = eventExtra.value.price || "";
+      eventExtraTicketInfo.value = eventExtra.value.ticketInfo || "";
+    }
+
+    async function saveEventExtra() {
+      if (!authUser.value || !selectedEvent.value?.sourceEventId) return;
+      const payload = await postJson("/api/event-extra", {
+        sourceEventId: selectedEvent.value.sourceEventId,
+        openTime: eventExtraOpenTime.value,
+        startTime: eventExtraStartTime.value,
+        officialUrl: eventExtraOfficialUrl.value,
+        ticketUrl: eventExtraTicketUrl.value,
+        price: eventExtraPrice.value,
+        ticketInfo: eventExtraTicketInfo.value
+      });
+      applyEventExtra(payload.extra || {});
+      eventExtraSaveState.value = "已保存";
+      window.setTimeout(() => {
+        if (eventExtraSaveState.value === "已保存") eventExtraSaveState.value = "";
+      }, 2200);
+    }
+
+    async function loadEventNote() {
+      if (!authUser.value || !selectedEvent.value?.sourceEventId) {
+        eventNoteStatus.value = "want";
+        eventNoteMemo.value = "";
+        return;
+      }
+      const payload = await getJson(`/api/event-note?sourceEventId=${encodeURIComponent(selectedEvent.value.sourceEventId)}`);
+      eventNoteStatus.value = payload.note?.status || "want";
+      eventNoteMemo.value = payload.note?.memo || "";
+    }
+
+    async function saveEventNote() {
+      if (!authUser.value || !selectedEvent.value?.sourceEventId) return;
+      const payload = await postJson("/api/event-note", {
+        sourceEventId: selectedEvent.value.sourceEventId,
+        status: eventNoteStatus.value,
+        memo: eventNoteMemo.value
+      });
+      eventNoteStatus.value = payload.note?.status || eventNoteStatus.value;
+      eventNoteMemo.value = payload.note?.memo || "";
+      eventNoteSaveState.value = "已保存";
+      window.setTimeout(() => {
+        if (eventNoteSaveState.value === "已保存") eventNoteSaveState.value = "";
+      }, 2200);
     }
 
     function currentRelatedQuery() {
@@ -930,21 +1671,68 @@ createApp({
 
     async function loadRelatedEvents(value) {
       if (!value) {
-        relatedEvents.value = [];
-        relatedEventTotal.value = 0;
+        relatedUpcomingEvents.value = [];
+        relatedEndedEvents.value = [];
+        relatedUpcomingTotal.value = 0;
+        relatedEndedTotal.value = 0;
+        relatedUpcomingPage.value = 1;
+        relatedEndedPage.value = 1;
         return;
       }
       loadingRelated.value = true;
+      try {
+        await Promise.all([
+          loadRelatedEventBucket("upcoming", 1, false),
+          loadRelatedEventBucket("ended", 1, false)
+        ]);
+      } finally {
+        loadingRelated.value = false;
+      }
+    }
+
+    async function loadRelatedEventBucket(bucket, pageNumber, append) {
+      const value = currentRelatedQuery();
+      if (!value) return;
+      const isUpcoming = bucket === "upcoming";
       const params = new URLSearchParams({
         q: value,
         city: "all",
         type: relatedEventType.value,
-        limit: "80"
+        sort: "date-desc",
+        page: String(pageNumber),
+        limit: String(relatedEventLimit)
       });
+      params.set(isUpcoming ? "dateFrom" : "dateBefore", initialDate);
       const payload = await getJson(`/api/events?${params}`);
-      relatedEvents.value = payload.items;
-      relatedEventTotal.value = payload.total;
-      loadingRelated.value = false;
+      if (isUpcoming) {
+        relatedUpcomingEvents.value = append ? [...relatedUpcomingEvents.value, ...(payload.items || [])] : payload.items || [];
+        relatedUpcomingTotal.value = payload.total;
+        relatedUpcomingPage.value = pageNumber;
+      } else {
+        relatedEndedEvents.value = append ? [...relatedEndedEvents.value, ...(payload.items || [])] : payload.items || [];
+        relatedEndedTotal.value = payload.total;
+        relatedEndedPage.value = pageNumber;
+      }
+    }
+
+    function loadMoreRelatedEvents(bucket) {
+      const section = relatedEventSections.value.find((group) => group.id === bucket);
+      if (loadingRelated.value || !section?.hasMore) return;
+      loadingRelated.value = true;
+      loadRelatedEventBucket(bucket, bucket === "upcoming" ? relatedUpcomingPage.value + 1 : relatedEndedPage.value + 1, true)
+        .catch((error) => {
+          console.error(error);
+        })
+        .finally(() => {
+        loadingRelated.value = false;
+        });
+    }
+
+    function toggleRelatedSection(id) {
+      const next = new Set(collapsedRelatedSections.value);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      collapsedRelatedSections.value = next;
     }
 
     async function loadSuggestions(value, scope, target) {
@@ -1018,6 +1806,213 @@ createApp({
     async function loadAuthSession() {
       const payload = await getJson("/api/auth/session");
       authUser.value = payload.user || null;
+      if (authUser.value) await Promise.all([loadFavorites(), loadProfile()]);
+      if (authUser.value && selectedEvent.value) await loadEventNote();
+    }
+
+    async function loadFavorites() {
+      if (!authUser.value) {
+        favoriteIds.value = new Set();
+        favoriteItems.value = [];
+        favoriteEntityIds.value = { artists: new Set(), works: new Set(), venues: new Set() };
+        favoriteArtists.value = [];
+        favoriteWorks.value = [];
+        favoriteVenues.value = [];
+        return;
+      }
+      const payload = await getJson("/api/favorites");
+      favoriteIds.value = new Set(payload.ids?.events || payload.favoriteIds || []);
+      favoriteEntityIds.value = {
+        artists: new Set(payload.ids?.artists || []),
+        works: new Set(payload.ids?.works || []),
+        venues: new Set(payload.ids?.venues || [])
+      };
+      favoriteItems.value = payload.items || [];
+      favoriteArtists.value = payload.favoriteArtists || [];
+      favoriteWorks.value = payload.favoriteWorks || [];
+      favoriteVenues.value = payload.favoriteVenues || [];
+      syncFavoriteCalendarSelection();
+    }
+
+    async function loadProfile() {
+      if (!authUser.value) return;
+      const payload = await getJson("/api/profile");
+      applyProfile(payload.profile || {});
+    }
+
+    async function loadCalendarFeed() {
+      if (!authUser.value) return;
+      const payload = await getJson("/api/calendar-feed");
+      calendarFeedUrl.value = payload.url || "";
+      calendarWebcalUrl.value = payload.webcalUrl || "";
+    }
+
+    function applyProfile(profile) {
+      profileDisplayName.value = profile.displayName || authUser.value?.displayName || "";
+      profileHomeArea.value = profile.homeArea || "";
+      profileFavoriteType.value = profile.favoriteType || "all";
+      profileAvatarUrl.value = profile.avatarUrl || "";
+      profileCoverUrl.value = profile.coverUrl || "";
+      profileStatusLine.value = profile.statusLine || "";
+      profileBio.value = profile.bio || "";
+      profileLinks.value = profile.links || "";
+      profileLinkDraftRows.value = profileLinkRowsFromText(profile.links || "");
+      profileTags.value = profile.tags || "";
+      profileContacts.value = profile.contacts || "";
+      profileContactDraftRows.value = profileContactRowsFromText(profile.contacts || "");
+      profileInterests.value = profile.interests || "";
+      profileInterestDraftRows.value = profileInterestRowsFromText(profile.interests || "");
+      activeProfileInterest.value = profileInterestRows.value[0]?.category || "";
+      if (authUser.value && profileDisplayName.value) {
+        authUser.value = {
+          ...authUser.value,
+          displayName: profileDisplayName.value
+        };
+      }
+    }
+
+    async function saveProfile() {
+      profileSaveState.value = "保存中...";
+      try {
+        const nextLinks = profileLinksText();
+        const nextContacts = profileContactsText();
+        const nextInterests = profileInterestsText();
+        const nextProfile = {
+        displayName: profileDisplayName.value,
+        homeArea: profileHomeArea.value,
+        favoriteType: profileFavoriteType.value,
+        avatarUrl: normalizeProfileUrl(profileAvatarUrl.value),
+        coverUrl: normalizeProfileUrl(profileCoverUrl.value),
+        statusLine: profileStatusLine.value,
+          bio: profileBio.value,
+          links: nextLinks,
+          tags: profileTags.value,
+          contacts: nextContacts,
+          interests: nextInterests
+        };
+        const payload = await postJson("/api/profile", nextProfile);
+        applyProfile(payload.profile || nextProfile);
+        if (authUser.value) {
+          authUser.value = {
+            ...authUser.value,
+            displayName: profileDisplayName.value || authUser.value.displayName
+          };
+        }
+        profileSaveState.value = "已保存";
+        go("profile");
+        window.setTimeout(() => {
+          if (profileSaveState.value === "已保存") profileSaveState.value = "";
+        }, 2200);
+      } catch (error) {
+        profileSaveState.value = `保存失败：${error?.message || String(error)}`;
+        console.error(error);
+      }
+    }
+
+    function openProfileEditor() {
+      profileLinkDraftRows.value = profileLinkRowsFromText(profileLinks.value);
+      profileContactDraftRows.value = profileContactRowsFromText(profileContacts.value);
+      profileInterestDraftRows.value = profileInterestRowsFromText(profileInterests.value);
+      window.location.hash = "#/profile/edit";
+    }
+
+    function addProfileTag() {
+      const tag = profileTagInput.value.trim().replace(/^#/, "");
+      if (!tag) return;
+      const tags = profileTagRows.value.map((value) => value.replace(/^#/, ""));
+      if (!tags.includes(tag)) tags.push(tag);
+      profileTags.value = tags.join("、");
+      profileTagInput.value = "";
+    }
+
+    function removeProfileTag(tag) {
+      const normalized = String(tag || "").replace(/^#/, "");
+      profileTags.value = profileTagRows.value
+        .map((value) => value.replace(/^#/, ""))
+        .filter((value) => value !== normalized)
+        .join("、");
+    }
+
+    function addProfileLink() {
+      profileLinkDraftRows.value.push({ label: "", url: "" });
+    }
+
+    function removeProfileLink(index) {
+      profileLinkDraftRows.value.splice(index, 1);
+    }
+
+    function addProfileContact() {
+      profileContactDraftRows.value.push({ label: "", value: "" });
+    }
+
+    function removeProfileContact(index) {
+      profileContactDraftRows.value.splice(index, 1);
+    }
+
+    function addProfileInterest() {
+      profileInterestDraftRows.value.push({ category: "", title: "", imageUrl: "", note: "" });
+    }
+
+    function removeProfileInterest(index) {
+      profileInterestDraftRows.value.splice(index, 1);
+    }
+
+    function profileLinksText() {
+      return profileLinkDraftRows.value
+        .map((link) => ({
+          label: String(link.label || "").trim(),
+          url: normalizeProfileUrl(link.url)
+        }))
+        .filter((link) => link.url)
+        .map((link) => `${link.label} ${link.url}`.trim())
+        .join("\n");
+    }
+
+    function profileContactsText() {
+      return profileContactDraftRows.value
+        .map((row) => ({
+          label: String(row.label || "").trim(),
+          value: String(row.value || "").trim()
+        }))
+        .filter((row) => row.label || row.value)
+        .map((row) => `${row.label} | ${row.value}`.trim())
+        .join("\n");
+    }
+
+    function profileInterestsText() {
+      return profileInterestDraftRows.value
+        .map((row) => ({
+          category: String(row.category || "").trim(),
+          title: String(row.title || "").trim(),
+          imageUrl: normalizeProfileUrl(row.imageUrl),
+          note: String(row.note || "").trim()
+        }))
+        .filter((row) => row.category || row.title || row.imageUrl || row.note)
+        .map((row) => `${row.category || "兴趣"} | ${row.title || "未命名"} | ${row.imageUrl} | ${row.note}`.trim())
+        .join("\n");
+    }
+
+    async function copyProfileContact(value) {
+      const text = String(value || "").trim();
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        profileCopyState.value = `已复制：${text}`;
+      } catch {
+        profileCopyState.value = `复制失败：${text}`;
+      }
+      window.setTimeout(() => {
+        if (profileCopyState.value.includes(text)) profileCopyState.value = "";
+      }, 2200);
+    }
+
+    function syncFavoriteCalendarSelection() {
+      if (favoriteItems.value.length === 0) return;
+      if (favoriteEventsByDate.value.has(favoriteSelectedDate.value)) return;
+      const firstUpcoming = favoriteItems.value.find((event) => event.date >= initialDate) || favoriteItems.value[0];
+      if (!firstUpcoming?.date) return;
+      favoriteSelectedDate.value = firstUpcoming.date;
+      favoriteMonth.value = firstUpcoming.date.slice(0, 7);
     }
 
     async function submitAuth() {
@@ -1031,6 +2026,7 @@ createApp({
         });
         authUser.value = payload.user;
         authPassword.value = "";
+        await Promise.all([loadFavorites(), loadProfile()]);
       } catch (error) {
         authError.value = error?.message || String(error);
       } finally {
@@ -1044,6 +2040,16 @@ createApp({
       try {
         await postJson("/api/auth/logout");
         authUser.value = null;
+        calendarFeedUrl.value = "";
+        calendarWebcalUrl.value = "";
+        favoriteIds.value = new Set();
+        favoriteItems.value = [];
+        favoriteEntityIds.value = { artists: new Set(), works: new Set(), venues: new Set() };
+        favoriteArtists.value = [];
+        favoriteWorks.value = [];
+        favoriteVenues.value = [];
+        eventNoteStatus.value = "want";
+        eventNoteMemo.value = "";
         authPassword.value = "";
       } catch (error) {
         authError.value = error?.message || String(error);
@@ -1055,6 +2061,7 @@ createApp({
     function go(target) {
       const nextPage = target || "home";
       page.value = nextPage;
+      routeParam.value = "";
       if (window.location.hash !== `#/${nextPage}`) {
         window.location.hash = `#/${nextPage}`;
       }
@@ -1079,18 +2086,24 @@ createApp({
 
     async function openEvent(event) {
       selectedEvent.value = event;
+      showAllEventArtists.value = false;
+      loadEventNote().catch(console.error);
+      loadEventExtra().catch(console.error);
       eventReturnPage.value = ["artist", "work", "venue"].includes(page.value) ? page.value : "events";
       if (event.sourceEventId) {
         try {
           const payload = await getJson(`/api/event?sourceEventId=${encodeURIComponent(event.sourceEventId)}`);
           selectedEvent.value = payload.item;
+          showAllEventArtists.value = false;
+          loadEventNote().catch(console.error);
+          loadEventExtra().catch(console.error);
         } catch (error) {
           console.error(error);
         }
       }
       page.value = "event";
       if (window.location.hash !== `#/event/${event.sourceEventId}`) {
-        window.location.hash = `/event/${event.sourceEventId}`;
+        window.location.hash = `#/event/${event.sourceEventId}`;
       }
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -1098,17 +2111,25 @@ createApp({
     function backFromEventDetail() {
       if (["artist", "work", "venue"].includes(eventReturnPage.value)) {
         page.value = eventReturnPage.value;
-        window.location.hash = `/${eventReturnPage.value}`;
+        routeParam.value = "";
+        window.location.hash = `#/${eventReturnPage.value}`;
         window.scrollTo({ top: 0, behavior: "smooth" });
         return;
       }
       if (selectedEvent.value?.date) {
         selectedDate.value = selectedEvent.value.date;
         currentMonth.value = selectedEvent.value.date.slice(0, 7);
+        page.value = "events";
+        routeParam.value = selectedEvent.value.date;
+        if (window.location.hash !== `#/events/${selectedEvent.value.date}`) {
+          window.location.hash = `#/events/${selectedEvent.value.date}`;
+        }
         loadCalendar().catch((error) => {
           loading.value = false;
           console.error(error);
         });
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
       }
       go("events");
     }
@@ -1137,7 +2158,7 @@ createApp({
         console.error(error);
       });
       page.value = "artist";
-      window.location.hash = `/artist/${encodeURIComponent(artist.name)}`;
+      window.location.hash = `#/artist/${encodeURIComponent(artist.name)}`;
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1148,7 +2169,7 @@ createApp({
         console.error(error);
       });
       page.value = "work";
-      window.location.hash = `/work/${encodeURIComponent(work.title)}`;
+      window.location.hash = `#/work/${encodeURIComponent(work.title)}`;
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1159,7 +2180,7 @@ createApp({
         console.error(error);
       });
       page.value = "venue";
-      window.location.hash = `/venue/${encodeURIComponent(venue.id)}`;
+      window.location.hash = `#/venue/${encodeURIComponent(venue.id)}`;
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1287,15 +2308,101 @@ createApp({
       });
     }
 
-    function isJoined(title) {
-      return joinedEvents.value.has(title);
+    function changeFavoriteMonth(offset) {
+      const months = [...favoriteMonthOptions.value].sort((a, b) => a.localeCompare(b));
+      if (months.length === 0) return;
+      const currentIndex = Math.max(0, months.indexOf(favoriteMonth.value));
+      const nextIndex = Math.min(months.length - 1, Math.max(0, currentIndex + offset));
+      setFavoriteMonth(months[nextIndex]);
     }
 
-    function toggleJoin(title) {
-      const next = new Set(joinedEvents.value);
-      if (next.has(title)) next.delete(title);
-      else next.add(title);
-      joinedEvents.value = next;
+    function setFavoriteMonth(month) {
+      if (!month) return;
+      favoriteMonth.value = month;
+      favoriteSelectedDate.value = `${favoriteMonth.value}-01`;
+      const firstSavedInMonth = favoriteItems.value.find((event) => event.date?.startsWith(favoriteMonth.value));
+      if (firstSavedInMonth?.date) favoriteSelectedDate.value = firstSavedInMonth.date;
+    }
+
+    function selectFavoriteDate(date) {
+      if (!date) return;
+      favoriteSelectedDate.value = date;
+      favoriteMonth.value = date.slice(0, 7);
+    }
+
+    function eventFavoriteKey(event) {
+      return event?.sourceEventId || "";
+    }
+
+    function isJoined(event) {
+      const key = eventFavoriteKey(event);
+      return key ? favoriteIds.value.has(key) : false;
+    }
+
+    function isEntityFavorite(type, key) {
+      return favoriteEntityIds.value[type]?.has(key) || false;
+    }
+
+    async function toggleEntityFavorite(type, key) {
+      if (!authUser.value) {
+        go("profile");
+        return;
+      }
+      if (!key) return;
+      const payload = isEntityFavorite(type, key)
+        ? await deleteJson("/api/favorites", { type, key })
+        : await postJson("/api/favorites", { type, key });
+      favoriteIds.value = new Set(payload.ids?.events || payload.favoriteIds || []);
+      favoriteEntityIds.value = {
+        artists: new Set(payload.ids?.artists || []),
+        works: new Set(payload.ids?.works || []),
+        venues: new Set(payload.ids?.venues || [])
+      };
+      favoriteItems.value = payload.items || [];
+      favoriteArtists.value = payload.favoriteArtists || [];
+      favoriteWorks.value = payload.favoriteWorks || [];
+      favoriteVenues.value = payload.favoriteVenues || [];
+      syncFavoriteCalendarSelection();
+    }
+
+    async function toggleJoin(event) {
+      if (!authUser.value) {
+        go("profile");
+        return;
+      }
+      const sourceEventId = eventFavoriteKey(event);
+      if (!sourceEventId) return;
+      try {
+        const payload = isJoined(event)
+          ? await deleteJson("/api/favorites", { sourceEventId })
+          : await postJson("/api/favorites", { sourceEventId });
+        favoriteIds.value = new Set(payload.ids?.events || payload.favoriteIds || []);
+        favoriteEntityIds.value = {
+          artists: new Set(payload.ids?.artists || []),
+          works: new Set(payload.ids?.works || []),
+          venues: new Set(payload.ids?.venues || [])
+        };
+        favoriteItems.value = payload.items || [];
+        favoriteArtists.value = payload.favoriteArtists || [];
+        favoriteWorks.value = payload.favoriteWorks || [];
+        favoriteVenues.value = payload.favoriteVenues || [];
+        syncFavoriteCalendarSelection();
+      } catch (error) {
+        authError.value = error?.message || String(error);
+        console.error(error);
+      }
+    }
+
+    function openSameDay(event) {
+      if (!event?.date) return;
+      selectedDate.value = event.date;
+      currentMonth.value = event.date.slice(0, 7);
+      go("events");
+      window.location.hash = `#/events/${event.date}`;
+    }
+
+    function mapUrlForVenue(venueName) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(displayVenue(venueName))}`;
     }
 
     function saveMemo() {
@@ -1324,12 +2431,22 @@ createApp({
     let currentRouteKey = "";
 
     function syncRouteFromHash() {
-      const nextPage = routePageFromHash();
+      let nextPage = routePageFromHash();
       const nextParam = routeParamFromHash();
+      if (nextPage === "account") {
+        nextPage = "profile";
+        if (window.location.hash !== "#/profile") window.location.hash = "#/profile";
+      }
       const nextRouteKey = `${nextPage}/${nextParam}`;
       if (nextRouteKey === currentRouteKey && page.value === nextPage) return;
       currentRouteKey = nextRouteKey;
       page.value = nextPage;
+      routeParam.value = nextParam;
+      if (nextPage === "profile" && nextParam === "edit" && authUser.value) {
+        profileLinkDraftRows.value = profileLinkRowsFromText(profileLinks.value);
+        profileContactDraftRows.value = profileContactRowsFromText(profileContacts.value);
+        profileInterestDraftRows.value = profileInterestRowsFromText(profileInterests.value);
+      }
       if (nextPage === "events" && /^\d{4}-\d{2}-\d{2}$/.test(nextParam)) {
         selectedDate.value = nextParam;
         currentMonth.value = nextParam.slice(0, 7);
@@ -1356,6 +2473,10 @@ createApp({
         });
       }
     });
+
+    watch(isAccountPage, (active) => {
+      document.body.classList.toggle("account-route", active);
+    }, { immediate: true });
 
     watch([query, city, eventType], () => {
       Promise.all([loadCalendar(), loadYearOverview()]).catch((error) => {
@@ -1411,9 +2532,96 @@ createApp({
       return calendarYears.value.find((row) => row.year === year)?.total || 0;
     }
 
+    function monthLabel(monthKey) {
+      const [year, month] = String(monthKey || "").split("-");
+      return year && month ? `${year}年${Number(month)}月` : monthKey;
+    }
+
+    function parseProfileLink(row) {
+      const text = String(row || "").trim();
+      if (!text) return null;
+      const urlMatch = text.match(/(?:https?:\/\/)?(?:[\w-]+\.)+[\w-]+[^\s]*/);
+      if (!urlMatch) return null;
+      const rawUrl = urlMatch[0];
+      const url = normalizeProfileUrl(rawUrl);
+      const label = text.replace(rawUrl, "").trim() || linkLabelFromUrl(url);
+      return { label, url };
+    }
+
+    function normalizeProfileUrl(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      if (/^https?:\/\//i.test(text)) return text;
+      return `https://${text}`;
+    }
+
+    function parseLabelValueRow(row) {
+      const text = String(row || "").trim();
+      if (!text) return null;
+      const [label, ...rest] = text.split("|").map((part) => part.trim());
+      const value = rest.join(" | ").trim();
+      if (!label && !value) return null;
+      return { label: label || "联系方式", value: value || label };
+    }
+
+    function parseInterestRow(row) {
+      const text = String(row || "").trim();
+      if (!text) return null;
+      const [category, title, ...rest] = text.split("|").map((part) => part.trim());
+      const firstRest = rest[0] || "";
+      const hasImage = /^(https?:\/\/)?(?:[\w-]+\.)+[\w-]+/i.test(firstRest);
+      const imageUrl = hasImage ? normalizeProfileUrl(firstRest) : "";
+      const note = (hasImage ? rest.slice(1) : rest).join(" | ").trim();
+      if (!category && !title && !note) return null;
+      return {
+        category: category || "兴趣",
+        title: title || "未命名",
+        imageUrl,
+        note
+      };
+    }
+
+    function profileLinkRowsFromText(text) {
+      const rows = String(text || "")
+        .split("\n")
+        .map(parseProfileLink)
+        .filter(Boolean);
+      return rows.length ? rows : [{ label: "", url: "" }];
+    }
+
+    function profileContactRowsFromText(text) {
+      const rows = String(text || "")
+        .split("\n")
+        .map(parseLabelValueRow)
+        .filter(Boolean);
+      return rows.length ? rows : [{ label: "", value: "" }];
+    }
+
+    function profileInterestRowsFromText(text) {
+      const rows = String(text || "")
+        .split("\n")
+        .map(parseInterestRow)
+        .filter(Boolean);
+      return rows.length ? rows : [{ category: "", title: "", note: "" }];
+    }
+
+    function linkLabelFromUrl(url) {
+      try {
+        const host = new URL(url).hostname.replace(/^www\./, "");
+        if (host.includes("twitter.com") || host.includes("x.com")) return "X";
+        if (host.includes("instagram.com")) return "Instagram";
+        if (host.includes("youtube.com") || host.includes("youtu.be")) return "YouTube";
+        if (host.includes("github.com")) return "GitHub";
+        return host;
+      } catch {
+        return "Link";
+      }
+    }
+
     return {
       applyDirectorySuggestion,
       applyQuerySuggestion,
+      actionInfoSummary,
       artists: artistRows,
       artistHistoricalTotal,
       authDisplayName,
@@ -1423,13 +2631,18 @@ createApp({
       authPassword,
       authUser,
       authUsername,
+      backFromEventDetail,
       budget,
       city,
       cityOptions,
       calendarCells,
+      calendarFeedUrl,
       calendarTitle,
       calendarTotal,
+      calendarWebcalUrl,
+      changeFavoriteMonth,
       changeMonth,
+      collapsedArtistLimit,
       currentMonth,
       currentYear,
       dataSources,
@@ -1441,7 +2654,33 @@ createApp({
       eventType,
       events,
       eventDisplayTags,
+      eventExtra,
+      eventExtraOfficialUrl,
+      eventExtraOpenTime,
+      eventExtraPrice,
+      eventExtraSaveState,
+      eventExtraStartTime,
+      eventExtraTicketInfo,
+      eventExtraTicketUrl,
+      eventNoteStatusLabel,
+      eventNoteMemo,
+      eventNoteSaveState,
+      eventNoteStatus,
+      eventNoteStatusOptions,
+      favoriteArtists,
+      favoriteCalendarCells,
+      favoriteCalendarTitle,
+      favoriteItems,
+      favoriteMonthOptions,
+      favoriteMonthTotal,
+      favoriteMonth,
+      favoriteSelectedDate,
+      favoriteSelectedDateLabel,
+      favoriteVenues,
+      favoriteWorks,
+      followedEntityCount,
       followedCount,
+      homeEvents,
       displayVenue,
       displayArtists,
       formatDetailDate,
@@ -1450,49 +2689,105 @@ createApp({
       hideSuggestions,
       hideSuggestionsSoon,
       isConcreteWorkTitle,
+      isAccountPage,
+      isEntityFavorite,
       isJoined,
       isNavActive,
+      isProfileEditPage,
       loading,
       loadError,
+      loadCalendarFeed,
+      loadMoreRelatedEvents,
       loadingRelated,
+      mapUrlForVenue,
       meta,
       memo,
+      monthLabel,
+      mySection,
       navItems,
+      nextPlanLabel,
       openArtist,
       openArtistByName,
       openEvent,
       openEventVenue,
       openEventWork,
+      openProfileEditor,
+      openSameDay,
       openVenue,
       openWork,
       page,
       plannedCount,
+      profileBio,
+      profileAvatarUrl,
+      profileCoverUrl,
+      profileContactDraftRows,
+      profileContactRows,
+      profileContacts,
+      profileCopyState,
+      profileDisplayName,
+      profileFavoriteType,
+      profileHomeArea,
+      profileInterestDraftRows,
+      profileInterestGroups,
+      profileInterestRows,
+      profileInterests,
+      profileLinkDraftRows,
+      profileLinkRows,
+      profileLinks,
+      profileSaveState,
+      profileStatusLine,
+      profileTagInput,
+      profileTagRows,
+      profileTags,
+      activeProfileInterest,
+      activeProfileInterestItems,
       query,
       querySuggestions,
       quickSearch,
       relatedEvents,
+      relatedEventSections,
       relatedEventTotal,
       relatedEventType,
+      addProfileContact,
+      addProfileInterest,
+      addProfileLink,
+      addProfileTag,
+      copyProfileContact,
+      removeProfileContact,
+      removeProfileInterest,
+      removeProfileLink,
+      removeProfileTag,
+      saveEventNote,
+      saveEventExtra,
       saveMemo,
+      saveProfile,
       saveState,
       selectDate,
+      selectFavoriteDate,
       selectedArtist,
+      selectedFavoriteItems,
       selectedDate,
       selectedDateLabel,
       selectedEvent,
       selectedVenue,
       selectedWork,
+      setFavoriteMonth,
       setYear,
+      showAllEventArtists,
       showDirectorySuggestions,
       showQuerySuggestions,
       logout,
       submitAuth,
+      toggleEntityFavorite,
       toggleJoin,
+      toggleRelatedSection,
       typeLabel,
       typeOptions,
+      upcomingFavoriteItems,
       venueHistoricalTotal,
       venues,
       visibleArtists,
+      visibleEventArtists,
       visibleVenues,
       visibleWorks,
       weekdays,

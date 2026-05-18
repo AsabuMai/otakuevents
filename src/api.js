@@ -17,8 +17,16 @@ export async function getJson(path) {
 }
 
 export async function postJson(path, payload = {}) {
+  return writeJson("POST", path, payload);
+}
+
+export async function deleteJson(path, payload = {}) {
+  return writeJson("DELETE", path, payload);
+}
+
+async function writeJson(method, path, payload = {}) {
   const response = await fetch(path, {
-    method: "POST",
+    method,
     headers: {
       "Content-Type": "application/json"
     },
