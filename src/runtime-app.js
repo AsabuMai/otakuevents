@@ -1,62 +1,21 @@
 import { computed, createApp, ref, watch } from "/node_modules/vue/dist/vue.esm-browser.js";
-
-const defaultCityOptions = [
-  ["all", "全部地区"],
-  ["unknown", "未标注"]
-];
-
-const typeOptions = [
-  ["all", "全部类型"],
-  ["event", "活动"],
-  ["live", "Live"],
-  ["fan", "Fan Event"],
-  ["talk", "Talk"],
-  ["release", "发售纪念"],
-  ["stage", "Anime Stage"],
-  ["theater", "舞台/音乐剧"],
-  ["screening", "上映会"],
-  ["radio", "公开收录"]
-];
-
-async function getJson(path) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 12000);
-  const separator = path.includes("?") ? "&" : "?";
-  const url = `${path}${separator}_=${Date.now()}`;
-  try {
-    const response = await fetch(url, {
-      cache: "no-store",
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`Request failed: ${path}`);
-    return await response.json();
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
-
-function routePageFromHash() {
-  return window.location.hash.replace("#/", "").split("/")[0] || "home";
-}
-
-function routeParamFromHash() {
-  return decodeURIComponent(window.location.hash.replace("#/", "").split("/")[1] || "");
-}
-
-function normalizeVenueName(value) {
-  return String(value || "").replace(/^!_*/, "").trim();
-}
-
-function isConcreteVenueName(value) {
-  const name = normalizeVenueName(value);
-  if (!name || name === "会场名待补全" || name === "会场未详") return false;
-  return !/(某所|某会場|某会场|未定|非公開|非公开|未発表|未发表|未告知)/.test(name);
-}
-
-function isConcreteWorkTitle(value) {
-  const title = String(value || "").trim();
-  return Boolean(title && !["Eventernote", "eventernote"].includes(title));
-}
+import { getJson } from "./api.js";
+import {
+  defaultCityOptions,
+  displayArtists,
+  displayVenue,
+  eventDisplayTags,
+  formatDate,
+  formatDetailDate,
+  isConcreteVenueName,
+  isConcreteWorkTitle,
+  routePageFromHash,
+  routeParamFromHash,
+  toDateKey,
+  typeLabel,
+  typeOptions
+} from "./domain.js";
+import { loadNotebook, saveNotebook } from "./notebook-store.js";
 
 const template = `
   <header class="topbar">
@@ -722,7 +681,6 @@ createApp({
     const currentMonth = ref(initialDate.slice(0, 7));
     const selectedDate = ref(initialDate);
     const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
-    const notebookStorageKey = "eventnote-japan-notebook";
     const followedCount = computed(() => artistRows.value.length);
     const joinedEvents = ref(new Set([
       "ラブライブ！虹ヶ咲 学园偶像同好会 Fan Meeting",
@@ -1178,13 +1136,6 @@ createApp({
       }
     }
 
-    function toDateKey(date) {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    }
-
     function isDateInCurrentMonth(dateString) {
       return /^\d{4}-\d{2}-\d{2}$/.test(dateString) && dateString.slice(0, 7) === currentMonth.value;
     }
@@ -1233,48 +1184,6 @@ createApp({
       });
     }
 
-    function formatDate(dateString) {
-      const date = new Date(`${dateString}T00:00:00`);
-      return {
-        month: date.toLocaleString("zh-CN", { month: "short" }),
-        day: String(date.getDate()).padStart(2, "0"),
-        weekday: date.toLocaleString("zh-CN", { weekday: "short" })
-      };
-    }
-
-    function formatDetailDate(dateString) {
-      const date = new Date(`${dateString}T00:00:00`);
-      return date.toLocaleDateString("zh-CN", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        weekday: "long"
-      });
-    }
-
-    function typeLabel(type) {
-      return typeOptions.find(([value]) => value === type)?.[1] || type;
-    }
-
-    function eventDisplayTags(event) {
-      const type = typeLabel(event.type).toLowerCase();
-      return (event.tags || []).filter((tag) => {
-        const normalized = tag.toLowerCase();
-        return normalized !== type && normalized !== "eventernote";
-      });
-    }
-
-    function displayVenue(value) {
-      const venue = normalizeVenueName(value);
-      if (!venue || venue === "会场名待补全" || venue === "会场未详") return "会场未标注";
-      return venue;
-    }
-
-    function displayArtists(event) {
-      const work = String(event?.work || "").trim();
-      return (event?.artists || []).filter((artist) => String(artist || "").trim() && artist !== work);
-    }
-
     function isJoined(title) {
       return joinedEvents.value.has(title);
     }
@@ -1287,24 +1196,17 @@ createApp({
     }
 
     function saveMemo() {
-      window.localStorage.setItem(notebookStorageKey, JSON.stringify({
+      saveNotebook({
         budget: budget.value,
-        memo: memo.value,
-        savedAt: new Date().toISOString()
-      }));
+        memo: memo.value
+      });
       saveState.value = `已保存。本月预算 ¥${Number(budget.value || 0).toLocaleString("ja-JP")}`;
     }
 
-    function loadNotebook() {
-      try {
-        const saved = JSON.parse(window.localStorage.getItem(notebookStorageKey) || "{}");
-        if (saved && typeof saved === "object") {
-          if (saved.budget !== undefined) budget.value = saved.budget;
-          if (typeof saved.memo === "string") memo.value = saved.memo;
-        }
-      } catch (error) {
-        console.error(error);
-      }
+    function hydrateNotebook() {
+      const saved = loadNotebook();
+      if (saved.budget !== undefined) budget.value = saved.budget;
+      if (typeof saved.memo === "string") memo.value = saved.memo;
     }
 
     document.addEventListener("click", (event) => {
@@ -1394,7 +1296,7 @@ createApp({
       loadError.value = error?.message || String(error);
       console.error(error);
     });
-    loadNotebook();
+    hydrateNotebook();
 
     if (page.value === "event") {
       loadEventBySourceId(routeParamFromHash()).catch(console.error);

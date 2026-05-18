@@ -59,6 +59,13 @@ npm run data:report
 - Keep server endpoints paginated unless the result set is known to be small.
 - Avoid adding dependencies unless they remove meaningful complexity.
 
+Frontend ownership:
+
+- `src/runtime-app.js`: Vue state, page interactions, and the large template.
+- `src/api.js`: browser API fetch wrapper.
+- `src/domain.js`: shared frontend constants, route parsing, date formatting, and display helpers.
+- `src/notebook-store.js`: local notebook persistence.
+
 ## Pull Request Checklist
 
 - The app builds with `npm run build`.
