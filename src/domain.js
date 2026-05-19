@@ -5,15 +5,15 @@ export const defaultCityOptions = [
 
 export const typeOptions = [
   ["all", "全部类型"],
-  ["event", "活动"],
-  ["live", "Live"],
-  ["fan", "Fan Event"],
-  ["talk", "Talk"],
+  ["event", "其他/未分类"],
+  ["live", "Live/演唱会"],
+  ["fan", "见面会/特典会"],
+  ["talk", "Talk/座谈"],
   ["release", "发售纪念"],
-  ["stage", "Anime Stage"],
+  ["stage", "展会/舞台活动"],
   ["theater", "舞台/音乐剧"],
   ["screening", "上映会"],
-  ["radio", "公开收录"]
+  ["radio", "公开收录/广播"]
 ];
 
 export function routePageFromHash(hash = window.location.hash) {
@@ -73,7 +73,7 @@ export function eventDisplayTags(event) {
   const label = typeLabel(event.type).toLowerCase();
   return (event.tags || []).filter((tag) => {
     const normalized = tag.toLowerCase();
-    return normalized !== label && normalized !== "eventernote";
+    return normalized !== label && normalized !== "eventernote" && tag !== "公演";
   });
 }
 

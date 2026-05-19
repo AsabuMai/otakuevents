@@ -10,6 +10,8 @@ const generatedDir = join(dataDir, "generated");
 const port = String(5300 + Math.floor(Math.random() * 1000));
 const baseUrl = `http://127.0.0.1:${port}`;
 let server;
+let serverOutput = "";
+let serverExitStatus = null;
 
 const catalog = {
   meta: {
@@ -115,14 +117,18 @@ async function postJson(path, payload, cookie = "") {
 async function waitForServer() {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
+    if (serverExitStatus) {
+      throw new Error(`Server exited before startup (${serverExitStatus}).\n${serverOutput.trim()}`);
+    }
+
     try {
-      const response = await fetch(`${baseUrl}/api/meta`);
+      const response = await fetch(`${baseUrl}/api/health`);
       if (response.ok) return;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
-  throw new Error("Server did not start within 10s");
+  throw new Error(`Server did not start within 10s.\n${serverOutput.trim()}`);
 }
 
 try {
@@ -140,12 +146,14 @@ try {
     stdio: ["ignore", "pipe", "pipe"]
   });
 
-  let serverOutput = "";
   server.stdout.on("data", (chunk) => {
     serverOutput += chunk;
   });
   server.stderr.on("data", (chunk) => {
     serverOutput += chunk;
+  });
+  server.on("exit", (code, signal) => {
+    serverExitStatus = signal ? `signal ${signal}` : `code ${code}`;
   });
 
   await waitForServer();

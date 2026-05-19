@@ -14,6 +14,8 @@
     "data:pack": "node scripts/pack-data.mjs",
     "sync:latest": "node scripts/sync-eventernote-latest.mjs --days=30 --detail-limit=1200",
     "sync:details": "node scripts/sync-eventernote-detail-batches.mjs --start-month=2024-05 --end-month=2027-12 --detail-limit=12000 --force-detail",
+    "sync:extras": "node scripts/sync-event-extras.mjs --start-date=2020-01-01",
+    "clean:extras": "node scripts/clean-event-extras.mjs",
     "data:clean": "node scripts/build-eventernote-catalog.mjs && node scripts/clean-eventernote-latest.mjs",
     "data:report": "node scripts/report-data-quality.mjs"
   },

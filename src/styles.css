@@ -1063,6 +1063,7 @@ textarea:focus {
   content: "";
   background: rgba(143, 172, 152, 0.46);
   border-radius: 999px;
+  display: none;
 }
 
 .home-page .event-card {
@@ -1173,12 +1174,31 @@ textarea:focus {
   border-color: rgba(166, 160, 189, 0.24);
 }
 
+.region-tag {
+  color: #426b5a;
+  background: #edf7f1;
+  border-color: rgba(91, 132, 111, 0.24);
+}
+
+.type-tag {
+  color: #8a5b48;
+  background: #fff1e8;
+  border-color: rgba(199, 139, 111, 0.26);
+}
+
 .join-button {
   width: 96px;
 }
 
 .join-button.joined {
   background: linear-gradient(145deg, var(--info), #627d88);
+}
+
+.secondary-button.join-button.joined {
+  color: var(--accent-deep);
+  background: rgba(238, 244, 239, 0.82);
+  border-color: rgba(139, 158, 148, 0.26);
+  box-shadow: none;
 }
 
 .event-detail-page {
@@ -1674,6 +1694,16 @@ textarea {
 .favorite-layout {
   display: grid;
   gap: 18px;
+}
+
+.favorite-overview {
+  display: grid;
+  gap: 18px;
+}
+
+.favorite-overview-section {
+  display: grid;
+  gap: 14px;
 }
 
 .favorite-calendar-panel {

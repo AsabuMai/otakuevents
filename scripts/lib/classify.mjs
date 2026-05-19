@@ -7,14 +7,22 @@ export function slugify(value) {
 
 export function detectType(name) {
   const lower = String(name || "").toLowerCase();
+  const typeText = lower.replace(/ラブライブ|lovelive|ミリオンライブ/g, "");
+  const liveWorkContext = /(アイドルマスター|学園アイドルマスター|アイマス|ラブライブ|lovelive|bang dream|バンドリ|d4dj|ウマ娘|プリキュア|初音ミク|hatsune miku|anisong|アニソン)/i.test(lower);
+  const liveProgramContext = /(選抜試験|セレクション|単独|合同|対バン|昼公演|夜公演|追加公演|フェス|祭り|ギグ)/.test(lower);
+  const strongLive = /miku expo|live|ライブ|ライヴ|らいぶ|concert|コンサート|ワンマン|tour|ツアー|fes|フェス|festival|歌謡|対バン|ギグ/.test(typeText);
+  const releaseLive = /(リリース記念ライブ|発売記念.*(ミニライブ|ライブ)|release tour)/.test(lower);
+  if (lower.includes("上映") || lower.includes("舞台挨拶") || lower.includes("ライブビューイング") || lower.includes("先行上映")) return "screening";
   if (/舞台|ミュージカル|朗読劇|演劇|劇団|act|theater|theatre/.test(lower)) return "theater";
+  if (/(トークショー|トークイベント|トーク＆バラエティ|座談|対談)/.test(lower) && !releaseLive) return "talk";
+  if (/(発売記念|リリースイベント|リリイベ|release event)/.test(lower) && !releaseLive) return "release";
+  if (strongLive || releaseLive) return "live";
   if (/ファンミ|fan ?meeting|お渡し会|握手会|サイン会|チェキ|撮影会|birthday|生誕|オフ会/.test(lower)) return "fan";
-  if (lower.includes("上映") || lower.includes("舞台挨拶")) return "screening";
   if (lower.includes("公開録音") || lower.includes("公開収録") || lower.includes("ラジオ")) return "radio";
   if (lower.includes("発売") || lower.includes("リリース") || lower.includes("release")) return "release";
   if (lower.includes("トーク") || lower.includes("talk")) return "talk";
   if (lower.includes("stage") || lower.includes("ステージ") || lower.includes("animejapan")) return "stage";
-  if (/live|ライブ|concert|コンサート|ワンマン|tour|ツアー|fes|フェス|festival|歌謡|音楽|対バン/.test(lower)) return "live";
+  if (liveWorkContext && liveProgramContext) return "live";
   return "event";
 }
 
@@ -46,7 +54,6 @@ export function makeTags(name, type) {
   const tags = [];
   if (type === "radio") tags.push("公开收录");
   if (type === "screening") tags.push("上映会");
-  if (/昼|夜|day|night/i.test(String(name || ""))) tags.push("公演");
   return [...new Set(tags)];
 }
 

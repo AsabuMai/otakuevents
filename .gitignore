@@ -10,6 +10,8 @@ releases/
 data/raw/eventernote-events.json
 data/generated/eventernote-catalog.json
 data/generated/eventernote-latest.json
+data/generated/event-extras 2.json
+data/generated/event-extras.cleaned.json
 data/local/
 
 # Local tunnel binary.

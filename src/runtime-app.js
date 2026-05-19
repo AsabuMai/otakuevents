@@ -112,9 +112,8 @@ const template = `
               <div>
                 <h3 class="event-title">{{ event.title }}</h3>
                 <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
-                <div class="tag-row">
-                  <span class="tag source-tag">{{ event.sourceName }}</span>
-                  <span v-for="tag in event.tags" :key="tag" class="tag">{{ tag }}</span>
+                <div v-if="eventCardTags(event).length" class="tag-row">
+                  <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
                 </div>
               </div>
               <button class="primary-button join-button" :class="{ joined: isJoined(event) }" type="button" @click.stop="toggleJoin(event)">
@@ -252,10 +251,8 @@ const template = `
               <span>{{ displayVenue(event.venue) }}</span>
               <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
             </div>
-            <div class="tag-row">
-              <span class="tag status-tag">{{ event.status }}</span>
-              <span class="tag source-tag">{{ event.sourceName }} · {{ event.verifiedAt }}</span>
-              <span v-for="tag in eventDisplayTags(event)" :key="tag" class="tag">{{ tag }}</span>
+            <div v-if="eventCardTags(event).length" class="tag-row">
+              <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
             </div>
           </div>
         </article>
@@ -548,6 +545,9 @@ const template = `
                 <div>
                   <h3 class="event-title">{{ event.title }}</h3>
                   <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                  <div v-if="eventCardTags(event).length" class="tag-row">
+                    <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
+                  </div>
                 </div>
               </article>
             </div>
@@ -621,6 +621,9 @@ const template = `
                 <div>
                   <h3 class="event-title">{{ event.title }}</h3>
                   <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                  <div v-if="eventCardTags(event).length" class="tag-row">
+                    <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
+                  </div>
                 </div>
               </article>
             </div>
@@ -701,6 +704,9 @@ const template = `
                 <div>
                   <h3 class="event-title">{{ event.title }}</h3>
                   <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                  <div v-if="eventCardTags(event).length" class="tag-row">
+                    <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
+                  </div>
                 </div>
               </article>
             </div>
@@ -740,7 +746,8 @@ const template = `
         <button class="primary-button" type="button" @click="go('profile')">去登录</button>
       </section>
 
-      <div v-if="authUser" class="my-tabs compact" role="tablist" aria-label="我的页面分区">
+      <div v-if="authUser" class="my-tabs" role="tablist" aria-label="我的页面分区">
+        <button type="button" :class="{ active: mySection === 'overview' }" @click="mySection = 'overview'">总览</button>
         <button type="button" :class="{ active: mySection === 'calendar' }" @click="mySection = 'calendar'">日历</button>
         <button type="button" :class="{ active: mySection === 'follows' }" @click="mySection = 'follows'">关注</button>
       </div>
@@ -767,6 +774,45 @@ const template = `
             <p v-if="favoriteVenues.length === 0" class="muted">还没有关注会场。</p>
           </section>
         </div>
+      </section>
+
+      <section v-if="authUser && mySection === 'overview'" class="favorite-overview">
+        <section class="dashboard compact-stats">
+          <div class="metric"><span>全部收藏</span><strong>{{ favoriteItems.length.toLocaleString("ja-JP") }}</strong></div>
+          <div class="metric"><span>计划中</span><strong>{{ favoritePlanningCount.toLocaleString("ja-JP") }}</strong></div>
+          <div class="metric"><span>已参加</span><strong>{{ favoriteDoneCount.toLocaleString("ja-JP") }}</strong></div>
+        </section>
+
+        <section v-if="favoriteItems.length === 0" class="panel empty-state">
+          <h2>还没有收藏活动</h2>
+          <p class="muted">在活动详情页点“加入我的活动”，这里会展示全部收藏活动。</p>
+          <button class="primary-button" type="button" @click="go('events')">浏览活动</button>
+        </section>
+
+        <section v-for="group in favoriteStatusGroups" :key="group.status" class="panel favorite-overview-section">
+          <div class="panel-head">
+            <h2>{{ group.label }}</h2>
+            <span class="muted">{{ group.items.length.toLocaleString("ja-JP") }} 场</span>
+          </div>
+          <div class="event-list compact">
+            <article v-for="event in group.items" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
+              <div class="date-box">
+                <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
+              </div>
+              <div>
+                <h3 class="event-title">{{ event.title }}</h3>
+                <div class="event-meta">
+                  <span>{{ displayVenue(event.venue) }}</span>
+                  <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
+                </div>
+                <div v-if="eventCardTags(event).length" class="tag-row">
+                  <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
+                </div>
+              </div>
+              <button class="secondary-button join-button joined" type="button" @click.stop="toggleJoin(event)">取消</button>
+            </article>
+          </div>
+        </section>
       </section>
 
       <section v-if="authUser && mySection === 'calendar' && favoriteItems.length === 0" class="panel empty-state">
@@ -851,6 +897,9 @@ const template = `
                 <div class="event-meta">
                   <span>{{ displayVenue(event.venue) }}</span>
                   <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
+                </div>
+                <div v-if="eventCardTags(event).length" class="tag-row">
+                  <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
                 </div>
               </div>
               <button class="secondary-button join-button joined" type="button" @click.stop="toggleJoin(event)">取消</button>
@@ -1217,21 +1266,14 @@ createApp({
     const activeProfileInterest = ref("");
     const profileCopyState = ref("");
     const profileSaveState = ref("");
-    const mySection = ref("calendar");
-    const eventNoteStatus = ref("want");
+    const mySection = ref("overview");
+    const eventNoteStatus = ref("none");
     const eventNoteMemo = ref("");
     const eventNoteSaveState = ref("");
     const showAllEventArtists = ref(false);
     const calendarFeedUrl = ref("");
     const calendarWebcalUrl = ref("");
     const eventExtra = ref({});
-    const eventExtraOpenTime = ref("");
-    const eventExtraStartTime = ref("");
-    const eventExtraOfficialUrl = ref("");
-    const eventExtraTicketUrl = ref("");
-    const eventExtraPrice = ref("");
-    const eventExtraTicketInfo = ref("");
-    const eventExtraSaveState = ref("");
     const collapsedArtistLimit = 12;
     const events = ref([]);
     const dayEvents = ref([]);
@@ -1341,8 +1383,16 @@ createApp({
       return `${next.date.slice(5).replace("-", "/")} ${next.title}`;
     });
     const eventNoteStatusLabel = computed(() => {
-      return eventNoteStatusOptions.find(([value]) => value === eventNoteStatus.value)?.[1] || "想去";
+      return eventNoteStatusOptions.find(([value]) => value === eventNoteStatus.value)?.[1] || "未记录";
     });
+    const eventCardTags = (event) => {
+      const city = String(event?.city || "").trim();
+      const region = city && city !== "unknown" && city !== "未标注" ? city : "";
+      return [
+        region ? { label: region, className: "region-tag" } : null,
+        { label: typeLabel(event?.type || "event"), className: "type-tag" }
+      ].filter(Boolean);
+    };
     const profileTagRows = computed(() => {
       return profileTags.value
         .split(/[\n,，、]/)
@@ -1402,6 +1452,44 @@ createApp({
       }
       return groups;
     });
+    const favoriteUpcomingItems = computed(() => {
+      return favoriteItems.value
+        .filter((event) => event.date && event.date >= initialDate)
+        .slice()
+        .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+    });
+    const favoriteEndedItems = computed(() => {
+      return favoriteItems.value
+        .filter((event) => !event.date || event.date < initialDate)
+        .slice()
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    });
+    const normalizeEventNoteStatus = (status) => {
+      if (status === "going") return "want";
+      if (status === "skip") return "none";
+      return eventNoteStatusOptions.some(([value]) => value === status) ? status : "none";
+    };
+    const eventStatusForFavorite = (event) => {
+      return normalizeEventNoteStatus(event?.note?.status || event?.myStatus || "none");
+    };
+    const sortFavoriteStatusItems = (items) => items.slice().sort((a, b) => {
+      const aUpcoming = a.date && a.date >= initialDate;
+      const bUpcoming = b.date && b.date >= initialDate;
+      if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+      if (aUpcoming && bUpcoming) return String(a.date || "").localeCompare(String(b.date || ""));
+      return String(b.date || "").localeCompare(String(a.date || ""));
+    });
+    const favoriteStatusGroups = computed(() => {
+      return eventNoteStatusOptions
+        .map(([status, label]) => ({
+          status,
+          label,
+          items: sortFavoriteStatusItems(favoriteItems.value.filter((event) => eventStatusForFavorite(event) === status))
+        }))
+        .filter((group) => group.items.length);
+    });
+    const favoritePlanningCount = computed(() => favoriteItems.value.filter((event) => ["want", "ticketing"].includes(eventStatusForFavorite(event))).length);
+    const favoriteDoneCount = computed(() => favoriteItems.value.filter((event) => eventStatusForFavorite(event) === "done").length);
     const favoriteCalendarTitle = computed(() => {
       const [year, month] = favoriteMonth.value.split("-");
       return `${year}年${Number(month)}月`;
@@ -1461,11 +1549,10 @@ createApp({
       }
     ]);
     const eventNoteStatusOptions = [
+      ["none", "未记录"],
       ["want", "想去"],
       ["ticketing", "抽选/购票中"],
-      ["going", "已决定参加"],
-      ["done", "已参加"],
-      ["skip", "放弃"]
+      ["done", "已参加"]
     ];
     const artistHistoricalTotal = computed(() => Math.max(selectedArtist.value?.follows || 0, relatedEventTotal.value || 0));
     const venueHistoricalTotal = computed(() => Math.max(selectedVenue.value?.events || 0, relatedEventTotal.value || 0));
@@ -1610,40 +1697,16 @@ createApp({
 
     function applyEventExtra(extra) {
       eventExtra.value = extra || {};
-      eventExtraOpenTime.value = eventExtra.value.openTime || "";
-      eventExtraStartTime.value = eventExtra.value.startTime || "";
-      eventExtraOfficialUrl.value = eventExtra.value.officialUrl || "";
-      eventExtraTicketUrl.value = eventExtra.value.ticketUrl || "";
-      eventExtraPrice.value = eventExtra.value.price || "";
-      eventExtraTicketInfo.value = eventExtra.value.ticketInfo || "";
-    }
-
-    async function saveEventExtra() {
-      if (!authUser.value || !selectedEvent.value?.sourceEventId) return;
-      const payload = await postJson("/api/event-extra", {
-        sourceEventId: selectedEvent.value.sourceEventId,
-        openTime: eventExtraOpenTime.value,
-        startTime: eventExtraStartTime.value,
-        officialUrl: eventExtraOfficialUrl.value,
-        ticketUrl: eventExtraTicketUrl.value,
-        price: eventExtraPrice.value,
-        ticketInfo: eventExtraTicketInfo.value
-      });
-      applyEventExtra(payload.extra || {});
-      eventExtraSaveState.value = "已保存";
-      window.setTimeout(() => {
-        if (eventExtraSaveState.value === "已保存") eventExtraSaveState.value = "";
-      }, 2200);
     }
 
     async function loadEventNote() {
       if (!authUser.value || !selectedEvent.value?.sourceEventId) {
-        eventNoteStatus.value = "want";
+        eventNoteStatus.value = "none";
         eventNoteMemo.value = "";
         return;
       }
       const payload = await getJson(`/api/event-note?sourceEventId=${encodeURIComponent(selectedEvent.value.sourceEventId)}`);
-      eventNoteStatus.value = payload.note?.status || "want";
+      eventNoteStatus.value = normalizeEventNoteStatus(payload.note?.status);
       eventNoteMemo.value = payload.note?.memo || "";
     }
 
@@ -2048,7 +2111,7 @@ createApp({
         favoriteArtists.value = [];
         favoriteWorks.value = [];
         favoriteVenues.value = [];
-        eventNoteStatus.value = "want";
+        eventNoteStatus.value = "none";
         eventNoteMemo.value = "";
         authPassword.value = "";
       } catch (error) {
@@ -2373,7 +2436,8 @@ createApp({
       const sourceEventId = eventFavoriteKey(event);
       if (!sourceEventId) return;
       try {
-        const payload = isJoined(event)
+        const wasJoined = isJoined(event);
+        const payload = wasJoined
           ? await deleteJson("/api/favorites", { sourceEventId })
           : await postJson("/api/favorites", { sourceEventId });
         favoriteIds.value = new Set(payload.ids?.events || payload.favoriteIds || []);
@@ -2386,6 +2450,13 @@ createApp({
         favoriteArtists.value = payload.favoriteArtists || [];
         favoriteWorks.value = payload.favoriteWorks || [];
         favoriteVenues.value = payload.favoriteVenues || [];
+        if (selectedEvent.value?.sourceEventId === sourceEventId) {
+          if (wasJoined && eventNoteStatus.value === "want" && !eventNoteMemo.value.trim()) {
+            eventNoteStatus.value = "none";
+          } else if (!wasJoined && eventNoteStatus.value === "none") {
+            eventNoteStatus.value = "want";
+          }
+        }
         syncFavoriteCalendarSelection();
       } catch (error) {
         authError.value = error?.message || String(error);
@@ -2651,17 +2722,11 @@ createApp({
       directorySuggestions,
       directoryQuery,
       eventBackLabel,
+      eventCardTags,
       eventType,
       events,
       eventDisplayTags,
       eventExtra,
-      eventExtraOfficialUrl,
-      eventExtraOpenTime,
-      eventExtraPrice,
-      eventExtraSaveState,
-      eventExtraStartTime,
-      eventExtraTicketInfo,
-      eventExtraTicketUrl,
       eventNoteStatusLabel,
       eventNoteMemo,
       eventNoteSaveState,
@@ -2670,12 +2735,17 @@ createApp({
       favoriteArtists,
       favoriteCalendarCells,
       favoriteCalendarTitle,
+      favoriteDoneCount,
+      favoriteEndedItems,
       favoriteItems,
       favoriteMonthOptions,
       favoriteMonthTotal,
       favoriteMonth,
+      favoritePlanningCount,
       favoriteSelectedDate,
       favoriteSelectedDateLabel,
+      favoriteStatusGroups,
+      favoriteUpcomingItems,
       favoriteVenues,
       favoriteWorks,
       followedEntityCount,
@@ -2758,7 +2828,6 @@ createApp({
       removeProfileLink,
       removeProfileTag,
       saveEventNote,
-      saveEventExtra,
       saveMemo,
       saveProfile,
       saveState,

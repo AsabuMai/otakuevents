@@ -10,7 +10,7 @@ import {
   normalizeLocationArea,
   normalizeVenueName
 } from "./scripts/lib/clean.mjs";
-import { detectWork, slugify, workRules } from "./scripts/lib/classify.mjs";
+import { detectType, detectWork, slugify, workRules } from "./scripts/lib/classify.mjs";
 
 const root = process.cwd();
 const port = Number(process.env.PORT || 5173);
@@ -22,6 +22,8 @@ const dataRoot = process.env.EVENTNOTE_DATA_DIR
   : join(root, "data");
 const catalogPath = join(dataRoot, "generated/eventernote-catalog.json");
 const latestPath = join(dataRoot, "generated/eventernote-latest.json");
+const venueNamesPath = join(dataRoot, "generated/venue-names.json");
+const eventVenueOverridesPath = join(dataRoot, "generated/event-venue-overrides.json");
 const localDataRoot = join(dataRoot, "local");
 const favoritesPath = join(localDataRoot, "favorites.json");
 const profilesPath = join(localDataRoot, "profiles.json");
@@ -53,39 +55,75 @@ function searchableEventText(event) {
 function inferAreaFromVenueName(value) {
   const name = String(value || "");
   const rules = [
-    ["東京都", /(東京|TOKYO|渋谷|SHIBUYA|新宿|池袋|有明|豊洲|台場|秋葉原|神田|日本橋|六本木|代官山|恵比寿|中野|立川|吉祥寺|町田|調布|日比谷|上野|浅草|両国|後楽園|水道橋|Zepp DiverCity|Zepp Haneda|Kanadevia Hall|TOKYO DOME CITY|TOYOTA ARENA TOKYO|ニッショーホール|SGC HALL ARIAKE|神楽坂)/i],
-    ["神奈川県", /(横浜|YOKOHAMA|川崎|KAWASAKI|みなとみらい|ぴあアリーナ|KT Zepp Yokohama)/i],
+    ["東京都", /(東京|TOKYO|渋谷|SHIBUYA|新宿|池袋|有明|豊洲|台場|お台場|秋葉原|AKIHABARA|アキバ|神田|日本橋|六本木|代官山|恵比寿|中野|立川|吉祥寺|町田|調布|日比谷|上野|浅草|両国|後楽園|水道橋|高田馬場|赤坂|原宿|表参道|五反田|荻窪|飯田橋|言問橋|TIF|clubasia|BLAZE GOTANDA|BLUE NOTE PLACE|Theater H|Zepp DiverCity|Zepp Haneda|Kanadevia Hall|TOKYO DOME CITY|TOYOTA ARENA TOKYO|ニッショーホール|SGC HALL ARIAKE|神楽坂)/i],
+    ["神奈川県", /(横浜|YOKOHAMA|川崎|KAWASAKI|みなとみらい|藤沢|江の島|片瀬江ノ島|OPPA-LA|ぴあアリーナ|KT Zepp Yokohama)/i],
     ["千葉県", /(千葉|CHIBA|幕張|MAKUHARI|舞浜|浦安|船橋|LaLa arena TOKYO-BAY)/i],
     ["埼玉県", /(埼玉|SAITAMA|さいたま|大宮|所沢|川口|越谷|西武ドーム|ベルーナドーム|HEAVEN'S ROCK)/i],
-    ["大阪府", /(大阪|OSAKA|梅田|UMEDA|難波|なんば|心斎橋|堺|枚方|吹田|Zepp Osaka|BANGBOO)/i],
+    ["大阪府", /(大阪|OSAKA|梅田|UMEDA|難波|なんば|心斎橋|堺|枚方|吹田|MAWA LOOP|Zepp Osaka|BANGBOO)/i],
     ["京都府", /(京都|KYOTO|KBSホール|ロームシアター京都)/i],
     ["兵庫県", /(兵庫|神戸|KOBE|西宮|尼崎|姫路)/i],
-    ["愛知県", /(愛知|名古屋|NAGOYA|栄|金山|IGアリーナ|愛知国際アリーナ|Zepp Nagoya)/i],
+    ["愛知県", /(愛知|名古屋|NAGOYA|一宮|栄|金山|COMTEC PORTBASE|IGアリーナ|愛知国際アリーナ|Zepp Nagoya)/i],
     ["福岡県", /(福岡|FUKUOKA|博多|小倉|久留米|福岡市民ホール|Zepp Fukuoka)/i],
-    ["北海道", /(北海道|札幌|SAPPORO|函館|旭川|小樽|Zepp Sapporo)/i],
+    ["北海道", /(北海道|札幌|SAPPORO|函館|旭川|小樽|苫小牧|美唄|サッポロビール園|Zepp Sapporo)/i],
     ["宮城県", /(宮城|仙台|SENDAI|GIGS)/i],
+    ["青森県", /(青森|AOMORI)/i],
+    ["岩手県", /(岩手|盛岡|MORIOKA)/i],
+    ["秋田県", /(秋田|AKITA)/i],
+    ["山形県", /(山形|YAMAGATA)/i],
+    ["福島県", /(福島|郡山|FUKUSHIMA)/i],
+    ["茨城県", /(茨城|水戸|MITO)/i],
+    ["栃木県", /(栃木|宇都宮|TOCHIGI)/i],
+    ["群馬県", /(群馬|高崎|前橋|GUNMA)/i],
     ["広島県", /(広島|HIROSHIMA)/i],
     ["静岡県", /(静岡|浜松|沼津|清水)/i],
-    ["長野県", /(長野|松本|軽井沢)/i],
+    ["長野県", /(長野|松本|軽井沢|富士見台高原|ヘブンスそのはら|阿智)/i],
     ["新潟県", /(新潟|NIIGATA)/i],
     ["石川県", /(石川|金沢)/i],
     ["岡山県", /(岡山|倉敷)/i],
+    ["岐阜県", /(岐阜|GIFU)/i],
+    ["三重県", /(三重|津市|四日市)/i],
+    ["滋賀県", /(滋賀|大津)/i],
+    ["奈良県", /(奈良|NARA)/i],
+    ["和歌山県", /(和歌山|WAKAYAMA)/i],
+    ["山口県", /(山口|下関)/i],
+    ["鳥取県", /(鳥取|TOTTORI)/i],
+    ["島根県", /(島根|松江)/i],
+    ["徳島県", /(徳島|TOKUSHIMA)/i],
     ["香川県", /(香川|高松|あなぶきアリーナ)/i],
+    ["愛媛県", /(愛媛|松山)/i],
+    ["高知県", /(高知|KOCHI)/i],
     ["佐賀県", /(佐賀|SAGAアリーナ|SAGA Arena)/i],
+    ["長崎県", /(長崎|NAGASAKI)/i],
+    ["大分県", /(大分|OITA)/i],
+    ["宮崎県", /(宮崎|MIYAZAKI)/i],
+    ["鹿児島県", /(鹿児島|薩摩川内|川内駅|KAGOSHIMA)/i],
     ["熊本県", /(熊本|KUMAMOTO)/i],
     ["沖縄県", /(沖縄|那覇|OKINAWA)/i],
-    ["韓国", /(Gocheok|고척|Seoul|ソウル|韓国)/i],
-    ["タイ", /(Suphachalasai|Bangkok|バンコク|タイ)/i],
+    ["韓国", /(Gocheok|고척|Seoul|ソウル|韓国|Korea|韓国公演)/i],
+    ["台湾", /(台北|台中|高雄|台湾|TAIPEI|TAICHUNG|KAOHSIUNG)/i],
+    ["香港", /(香港|Hong Kong|\bHK\b|HKCEC|PORTAL)/i],
+    ["中国", /(上海|北京|広州|深圳|杭州|南京|成都|China|中国公演)/i],
+    ["タイ", /(Suphachalasai|Bangkok|バンコク|タイ|Thailand)/i],
+    ["インドネシア", /(Jakarta|ジャカルタ|Indonesia|インドネシア)/i],
+    ["シンガポール", /(Singapore|シンガポール)/i],
+    ["マレーシア", /(Kuala Lumpur|クアラルンプール|Malaysia|マレーシア)/i],
+    ["フィリピン", /(Manila|マニラ|Philippine|フィリピン)/i],
+    ["アメリカ", /(New York|Los Angeles|Atlanta|Chicago|Seattle|Portland|Washington|United States|USA|North America)/i],
+    ["カナダ", /(Toronto|Vancouver|Canada|カナダ)/i],
+    ["イギリス", /(London|Manchester|United Kingdom|UK|イギリス)/i],
+    ["ドイツ", /(Berlin|Düsseldorf|Dusseldorf|Frankfurt|Germany|ドイツ)/i],
+    ["オランダ", /(Amsterdam|Netherlands|オランダ)/i],
+    ["ベルギー", /(Brussels|Belgium|ベルギー)/i],
     ["スペイン", /(Palacio Vistalegre|Madrid|マドリード|スペイン)/i],
     ["フランス", /(Accor Arena|Paris|パリ|フランス)/i]
   ];
   return rules.find(([, pattern]) => pattern.test(name))?.[0] || "";
 }
 
-function cleanArea(area, venueName = "") {
+function cleanArea(area, venueName = "", eventTitle = "") {
   const normalized = normalizeLocationArea(area);
-  if (normalized && normalized !== "unknown" && normalized !== "未标注") return normalized;
-  return inferAreaFromVenueName(venueName) || "未标注";
+  if (normalized && normalized !== "unknown" && normalized !== "未标注" && normalized !== "海外") return normalized;
+  return inferAreaFromVenueName(`${venueName} ${eventTitle}`) || (normalized === "海外" ? normalized : "未标注");
 }
 
 function mergeLatestCatalog(catalog) {
@@ -102,6 +140,45 @@ function mergeLatestCatalog(catalog) {
       latestSync: latest.meta || null
     },
     events: [...eventRows.values()]
+  };
+}
+
+function mergeVenueNameCache(catalog) {
+  if (!existsSync(venueNamesPath)) return catalog;
+  const rows = JSON.parse(readFileSync(venueNamesPath, "utf8"));
+  const venueById = new Map(catalog.venues.map((venue) => [venue.id, venue]));
+  for (const row of rows) {
+    if (!row?.ok || !row.id || !row.name) continue;
+    venueById.set(row.id, {
+      ...(venueById.get(row.id) || { id: row.id, capacity: "未补全", events: 0 }),
+      id: row.id,
+      name: row.name,
+      area: row.area || venueById.get(row.id)?.area || "",
+      sourceUrl: row.sourceUrl || venueById.get(row.id)?.sourceUrl || ""
+    });
+  }
+  return {
+    ...catalog,
+    venues: [...venueById.values()]
+  };
+}
+
+function mergeEventVenueOverrides(catalog) {
+  if (!existsSync(eventVenueOverridesPath)) return catalog;
+  const rows = JSON.parse(readFileSync(eventVenueOverridesPath, "utf8")).filter((row) => row?.ok && row.name && row.sourceEventId);
+  if (!rows.length) return catalog;
+  const overridesByEventId = new Map(rows.map((row) => [String(row.sourceEventId), row]));
+  return {
+    ...catalog,
+    events: catalog.events.map((event) => {
+      const override = overridesByEventId.get(String(event.sourceEventId));
+      if (!override) return event;
+      return {
+        ...event,
+        venue: override.name,
+        venueId: override.venueId || event.venueId || `eventernote-event-${event.sourceEventId}-venue`
+      };
+    })
   };
 }
 
@@ -126,7 +203,7 @@ function rebuildDirectories(catalog) {
         venueMetaById.set(event.venueId, {
           id: event.venueId,
           name: event.venue,
-          area: event.city && event.city !== "unknown" ? event.city : cleanArea("", event.venue),
+          area: event.city && event.city !== "unknown" ? event.city : cleanArea("", event.venue, event.title),
           capacity: "未补全",
           events: 0,
           sourceUrl: event.sourceUrl
@@ -184,7 +261,8 @@ function sanitizeCatalog(catalog) {
   const venueAreaById = new Map(venues.map((venue) => [venue.id, cleanArea(venue.area, venue.name)]));
   const events = catalog.events.map((event) => ({
     ...event,
-    city: cleanArea(venueAreaById.get(event.venueId) || event.city, event.venue),
+    type: detectType(event.title),
+    city: cleanArea(venueAreaById.get(event.venueId) || event.city, event.venue, event.title),
     venue: normalizeVenueName(event.venue)
   }));
   const locationCounts = new Map();
@@ -242,7 +320,7 @@ function buildIndexes(catalog) {
 
 function loadCatalog() {
   if (!catalogCache) {
-    catalogCache = buildIndexes(sanitizeCatalog(rebuildDirectories(normalizeCatalogWorks(mergeLatestCatalog(JSON.parse(readFileSync(catalogPath, "utf8")))))));
+    catalogCache = buildIndexes(sanitizeCatalog(rebuildDirectories(normalizeCatalogWorks(mergeEventVenueOverrides(mergeVenueNameCache(mergeLatestCatalog(JSON.parse(readFileSync(catalogPath, "utf8")))))))));
     console.log(`Loaded ${catalogCache.events.length.toLocaleString("ja-JP")} Eventernote events from server-side catalog.`);
   }
   return catalogCache;
@@ -327,9 +405,15 @@ function favoriteRowsForUser(catalog, userId) {
   const bucket = normalizeFavoriteBucket(store.users[userId]);
   const eventIds = bucket.events;
   const favoriteIds = new Set(eventIds);
+  const noteStore = readEventNotes();
+  const userNotes = noteStore.users[userId] || {};
   const items = eventIds
     .map((sourceEventId) => catalog.indexes.eventsBySourceId.get(sourceEventId))
     .filter(Boolean)
+    .map((event) => ({
+      ...event,
+      note: userNotes[event.sourceEventId] || { status: "none", memo: "" }
+    }))
     .sort((a, b) => `${a.date || ""} ${a.title || ""}`.localeCompare(`${b.date || ""} ${b.title || ""}`));
   const artistByName = new Map(catalog.artists.map((artist) => [artist.name, artist]));
   const workByTitle = new Map(catalog.works.map((work) => [work.title, work]));
@@ -457,11 +541,11 @@ function readEventNotes() {
 
 function eventNoteForUser(userId, sourceEventId) {
   const store = readEventNotes();
-  return store.users[userId]?.[sourceEventId] || { status: "want", memo: "" };
+  return store.users[userId]?.[sourceEventId] || { status: "none", memo: "" };
 }
 
 function sanitizeEventNote(body = {}) {
-  const status = ["want", "ticketing", "going", "done", "skip"].includes(body.status) ? body.status : "want";
+  const status = ["none", "want", "ticketing", "done"].includes(body.status) ? body.status : "none";
   return {
     status,
     memo: String(body.memo || "").slice(0, 300),
@@ -574,6 +658,15 @@ async function handleApi(request, pathname, searchParams, response) {
     bucket[type] = [...ids];
     store.users[user.id] = bucket;
     writeJsonStore(favoritesPath, store);
+    if (type === "events") {
+      const notes = readEventNotes();
+      const currentNote = notes.users[user.id]?.[key];
+      if (!currentNote || currentNote.status === "none") {
+        notes.users[user.id] = notes.users[user.id] || {};
+        notes.users[user.id][key] = sanitizeEventNote({ status: "want", memo: currentNote?.memo || "" });
+        writeJsonStore(eventNotesPath, notes);
+      }
+    }
     sendJson(response, favoriteRowsForUser(catalog, user.id));
     return true;
   }
@@ -591,6 +684,14 @@ async function handleApi(request, pathname, searchParams, response) {
     bucket[type] = [...ids];
     store.users[user.id] = bucket;
     writeJsonStore(favoritesPath, store);
+    if (type === "events") {
+      const notes = readEventNotes();
+      const currentNote = notes.users[user.id]?.[key];
+      if (currentNote?.status === "want" && !currentNote.memo) {
+        notes.users[user.id][key] = sanitizeEventNote({ status: "none", memo: "" });
+        writeJsonStore(eventNotesPath, notes);
+      }
+    }
     sendJson(response, favoriteRowsForUser(catalog, user.id));
     return true;
   }

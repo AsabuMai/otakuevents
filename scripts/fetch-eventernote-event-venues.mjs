@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const catalogPath = "data/generated/eventernote-catalog.json";
+const latestPath = "data/generated/eventernote-latest.json";
 const outPath = "data/generated/event-venue-overrides.json";
 
 const args = new Map(
@@ -13,6 +14,11 @@ const args = new Map(
 const mode = args.get("mode") || "unknown";
 const limit = Number(args.get("limit") || 500);
 const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
+const latest = existsSync(latestPath) ? JSON.parse(readFileSync(latestPath, "utf8")) : { events: [] };
+const eventsById = new Map((catalog.events || []).map((event) => [String(event.sourceEventId), event]));
+for (const event of latest.events || []) {
+  if (event?.sourceEventId) eventsById.set(String(event.sourceEventId), event);
+}
 const existingRows = existsSync(outPath) ? JSON.parse(readFileSync(outPath, "utf8")) : [];
 const existingByEventId = new Map(existingRows.map((row) => [row.sourceEventId, row]));
 
@@ -47,7 +53,7 @@ function cleanVenueName(value = "") {
 function isUsefulVenue(value = "") {
   if (!value) return false;
   if (/^(未定|未詳|TBA|調整中|なし)$/i.test(value)) return false;
-  if (/(当選|購入者|メール|ご案内|ご連絡|通知|あなたのいる場所|某|予定|未定|アクセス$)/.test(value)) return false;
+  if (/(当選|購入者|メール|ご案内|ご連絡|通知|あなたのいる場所|某|予定|未定|アクセス|アクセスの良いところ|どこか|どちらか)/.test(value)) return false;
   if (/^〒/.test(value)) return false;
   if (value.length > 80) return false;
   return true;
@@ -97,9 +103,11 @@ function extractVenue(html) {
 
 function shouldFetch(event) {
   if (existingByEventId.get(event.sourceEventId)?.name) return false;
-  if (mode === "unknown") return event.venueId === "eventernote-place-unknown";
-  if (mode === "missing") return event.venue === "会场名待补全" || event.venue === "会场未详";
-  return event.venueId === "eventernote-place-unknown" || event.venue === "会场名待补全" || event.venue === "会场未详";
+  const missingVenueId = !event.venueId || event.venueId === "eventernote-place-unknown";
+  const missingVenueName = !event.venue || event.venue === "会场名待补全" || event.venue === "会场未详";
+  if (mode === "unknown") return missingVenueId;
+  if (mode === "missing") return missingVenueName;
+  return missingVenueId || missingVenueName;
 }
 
 async function fetchEventVenue(event) {
@@ -132,7 +140,10 @@ async function fetchEventVenue(event) {
   };
 }
 
-const targets = catalog.events.filter(shouldFetch).slice(0, limit);
+const targets = [...eventsById.values()]
+  .filter(shouldFetch)
+  .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || Number(b.sourceEventId || 0) - Number(a.sourceEventId || 0))
+  .slice(0, limit);
 const rows = [];
 for (const [index, event] of targets.entries()) {
   const row = await fetchEventVenue(event);
