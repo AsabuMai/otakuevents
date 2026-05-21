@@ -16,3 +16,5 @@ data/local/
 
 # Local tunnel binary.
 tools/cloudflared
+
+backups/

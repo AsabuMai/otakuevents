@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { createLocalDb } from "./local-db.mjs";
 
 const scryptAsync = promisify(scrypt);
 const sessionCookie = "otakuevents_session";
@@ -10,8 +11,8 @@ const usernamePattern = /^[a-zA-Z0-9_.-]{3,32}$/;
 
 export function createAuth({ dataRoot }) {
   const localDir = join(dataRoot, "local");
-  const usersPath = join(localDir, "users.json");
   const secretPath = join(localDir, "auth-secret");
+  const localDb = createLocalDb({ dataRoot });
   mkdirSync(localDir, { recursive: true });
 
   const secret = loadOrCreateSecret(secretPath);
@@ -37,8 +38,7 @@ export function createAuth({ dataRoot }) {
         return true;
       }
 
-      const store = readUsers(usersPath);
-      if (store.users.some((user) => user.username === username)) {
+      if (localDb.findUserByUsername(username)) {
         sendAuthJson(response, { error: "这个用户名已经被注册。" }, 409);
         return true;
       }
@@ -50,8 +50,7 @@ export function createAuth({ dataRoot }) {
         password: await hashPassword(password),
         createdAt: new Date().toISOString()
       };
-      store.users.push(user);
-      writeUsers(usersPath, store);
+      localDb.insertUser(user);
       setSessionCookie(response, signSession(user), request);
       sendAuthJson(response, { user: publicUser(user) }, 201);
       return true;
@@ -61,7 +60,7 @@ export function createAuth({ dataRoot }) {
       const body = await readJsonBody(request);
       const username = normalizeUsername(body.username);
       const password = String(body.password || "");
-      const user = readUsers(usersPath).users.find((row) => row.username === username);
+      const user = localDb.findUserByUsername(username);
 
       if (!user || !(await verifyPassword(password, user.password))) {
         sendAuthJson(response, { error: "用户名或密码不正确。" }, 401);
@@ -89,7 +88,7 @@ export function createAuth({ dataRoot }) {
     const payload = verifySession(token);
     if (!payload || payload.exp < Date.now()) return null;
 
-    const user = readUsers(usersPath).users.find((row) => row.id === payload.userId);
+    const user = localDb.findUserById(payload.userId);
     return user ? publicUser(user) : null;
   }
 
@@ -132,22 +131,6 @@ function normalizeUsername(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function readUsers(usersPath) {
-  if (!existsSync(usersPath)) return { users: [] };
-  try {
-    const parsed = JSON.parse(readFileSync(usersPath, "utf8"));
-    return {
-      users: Array.isArray(parsed.users) ? parsed.users : []
-    };
-  } catch {
-    return { users: [] };
-  }
-}
-
-function writeUsers(usersPath, store) {
-  writeFileSync(usersPath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-}
-
 async function hashPassword(password) {
   const salt = randomBytes(16).toString("base64url");
   const hash = await scryptAsync(password, salt, 64);
@@ -174,8 +157,20 @@ function publicUser(user) {
   return {
     id: user.id,
     username: user.username,
-    displayName: user.displayName || user.username
+    displayName: user.displayName || user.username,
+    isAdmin: isAdminUser(user)
   };
+}
+
+function adminUsernames() {
+  return new Set(["admin", ...String(process.env.ADMIN_USERNAMES || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)]);
+}
+
+function isAdminUser(user) {
+  return adminUsernames().has(String(user?.username || "").toLowerCase());
 }
 
 async function readJsonBody(request) {

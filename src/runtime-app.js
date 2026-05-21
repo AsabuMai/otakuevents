@@ -24,7 +24,7 @@ const template = `
       <span>Eventnote Japan</span>
     </a>
     <nav v-if="!isAccountPage" class="nav" aria-label="主导航">
-      <a v-for="item in navItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
+      <a v-for="item in visibleNavItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
         {{ item.label }}
       </a>
     </nav>
@@ -36,7 +36,7 @@ const template = `
   </header>
 
   <nav v-if="!isAccountPage" class="mobile-tabs" aria-label="移动导航">
-    <a v-for="item in navItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
+    <a v-for="item in visibleNavItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
       {{ item.short }}
     </a>
   </nav>
@@ -365,6 +365,96 @@ const template = `
             </label>
             <button class="secondary-button" type="submit">保存状态</button>
           </form>
+        </section>
+
+        <section class="panel event-community-panel">
+          <div class="panel-head">
+            <h2>这场活动的大家</h2>
+            <span class="muted">{{ interactionSaveState }}</span>
+          </div>
+          <div class="event-status-grid">
+            <div v-for="item in eventStatusStats" :key="item.status">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.count.toLocaleString("ja-JP") }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel event-qa-panel">
+          <div class="panel-head">
+            <h2>活动问答</h2>
+            <span class="muted">{{ eventQuestions.length.toLocaleString("ja-JP") }} 个问题</span>
+          </div>
+          <form class="event-inline-form" @submit.prevent="submitQuestion">
+            <input v-model="questionDraft" placeholder="例如：电子票需要本人确认吗？物贩几点开始？">
+            <button class="secondary-button" type="submit">{{ authUser ? "提问" : "登录提问" }}</button>
+          </form>
+          <div class="qa-list">
+            <article v-for="question in eventQuestions" :key="question.id" class="qa-card">
+              <div class="qa-head">
+                <strong>{{ question.body }}</strong>
+                <span>{{ question.author.displayName }} <em v-if="question.author.isAdmin">管理员</em></span>
+              </div>
+              <div v-if="question.answers.length" class="answer-list">
+                <div v-for="answer in question.answers" :key="answer.id">
+                  <p>{{ answer.body }}</p>
+                  <span>{{ answer.author.displayName }} <em v-if="answer.author.isAdmin">管理员</em></span>
+                </div>
+              </div>
+              <form class="event-inline-form compact" @submit.prevent="submitAnswer(question)">
+                <input v-model="question.answerDraft" placeholder="补充一个回答">
+                <button class="ghost-button" type="submit">{{ authUser ? "回答" : "登录回答" }}</button>
+              </form>
+            </article>
+            <p v-if="eventQuestions.length === 0" class="muted">还没有问题。可以从票务、入场、物贩、交通这些点开始问。</p>
+          </div>
+        </section>
+
+        <section class="panel event-correction-panel">
+          <div class="panel-head">
+            <h2>信息纠错 / 确认</h2>
+            <span class="muted">{{ canReviewCorrections ? "管理员模式" : "用户补完" }}</span>
+          </div>
+          <form class="correction-form" @submit.prevent="submitCorrection">
+            <label class="search-field">
+              <span>字段</span>
+              <select v-model="correctionField">
+                <option v-for="[value, label] in correctionFieldOptions" :key="value" :value="value">{{ label }}</option>
+              </select>
+            </label>
+            <label class="search-field">
+              <span>建议内容</span>
+              <input v-model="correctionValue" placeholder="正确会场、时间、票务信息等">
+            </label>
+            <label class="search-field">
+              <span>来源 URL</span>
+              <input v-model="correctionSourceUrl" placeholder="https://">
+            </label>
+            <label class="search-field correction-note-field">
+              <span>说明</span>
+              <input v-model="correctionNote" placeholder="为什么这样改">
+            </label>
+            <button class="secondary-button" type="submit">{{ authUser ? "提交纠错" : "登录提交" }}</button>
+          </form>
+          <div class="correction-list">
+            <article v-for="correction in eventCorrections" :key="correction.id" class="correction-card" :class="correction.status">
+              <div>
+                <span>{{ correction.fieldLabel }}</span>
+                <strong>{{ correction.value }}</strong>
+                <p v-if="correction.note">{{ correction.note }}</p>
+                <a v-if="correction.sourceUrl" :href="correction.sourceUrl" target="_blank" rel="noreferrer">来源</a>
+              </div>
+              <div class="correction-actions">
+                <span class="tag">{{ correctionStatusLabel(correction.status) }}</span>
+                <button class="ghost-button" type="button" :disabled="correction.confirmedByMe" @click="confirmCorrection(correction)">
+                  {{ correction.confirmationCount.toLocaleString("ja-JP") }} 人确认
+                </button>
+                <button v-if="canReviewCorrections && correction.status === 'pending'" class="secondary-button" type="button" @click="reviewCorrection(correction, 'confirmed')">确认</button>
+                <button v-if="canReviewCorrections && correction.status === 'pending'" class="ghost-button" type="button" @click="reviewCorrection(correction, 'rejected')">驳回</button>
+              </div>
+            </article>
+            <p v-if="eventCorrections.length === 0" class="muted">还没有纠错记录。用户提交后可由其他人确认，管理员可最终确认或驳回。</p>
+          </div>
         </section>
 
         <section class="panel detail-section">
@@ -965,6 +1055,7 @@ const template = `
               <p class="profile-handle">@{{ authUser.username }}</p>
             </div>
             <div class="profile-cover-actions">
+              <a v-if="publicProfileUrl" class="secondary-button link-button" :href="publicProfileUrl" target="_blank" rel="noreferrer">查看公开主页</a>
               <button class="primary-button" type="button" @click="openProfileEditor">编辑主页</button>
               <button class="secondary-button" type="button" @click="logout" :disabled="authLoading">退出登录</button>
             </div>
@@ -1105,6 +1196,20 @@ const template = `
               <span>主页介绍</span>
               <textarea v-model="profileBio" rows="3" placeholder="喜欢的声优、作品、活动风格"></textarea>
             </label>
+            <section class="profile-bio-field profile-visibility-panel">
+              <div>
+                <span class="field-label">公开主页</span>
+                <p class="muted">控制别人打开你的公开主页时能看到哪些内容。联系方式 / 社交平台默认不公开，打开后才展示。</p>
+              </div>
+              <div class="profile-visibility-grid">
+                <label><input v-model="profileVisibilityEnabled" type="checkbox"> 启用公开主页</label>
+                <label><input v-model="profileVisibilityStats" type="checkbox"> 公开活动统计</label>
+                <label><input v-model="profileVisibilityLinks" type="checkbox"> 公开外部链接</label>
+                <label><input v-model="profileVisibilityContacts" type="checkbox"> 公开联系方式 / 社交平台</label>
+                <label><input v-model="profileVisibilityInterests" type="checkbox"> 公开兴趣与推し</label>
+                <label><input v-model="profileVisibilityFollows" type="checkbox"> 公开关注对象</label>
+              </div>
+            </section>
             <label class="search-field profile-bio-field">
               <span>标签</span>
               <div class="chip-editor">
@@ -1160,6 +1265,113 @@ const template = `
       </template>
     </section>
 
+    <section v-if="isPublicProfilePage" class="page-view profile-page">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">Public profile</p>
+          <h1>公开主页</h1>
+        </div>
+      </div>
+
+      <section v-if="publicProfileLoading" class="panel">
+        <p class="muted">公开主页加载中...</p>
+      </section>
+
+      <section v-else-if="publicProfileError" class="panel empty-state">
+        <h2>没有找到这个用户</h2>
+        <p class="muted">{{ publicProfileError }}</p>
+      </section>
+
+      <template v-else-if="publicProfile">
+        <section class="profile-link-card public-profile-card">
+          <div class="profile-cover">
+            <span class="avatar profile-avatar">
+              <img v-if="publicProfileData.avatarUrl" :src="publicProfileData.avatarUrl" alt="个人头像">
+              <span v-else>{{ publicProfileData.displayName?.slice(0, 1) || publicProfile.user.username.slice(0, 1) }}</span>
+            </span>
+            <div>
+              <p class="eyebrow">Activity identity</p>
+              <h2>{{ publicProfileData.displayName || publicProfile.user.displayName }}</h2>
+              <p class="profile-handle">@{{ publicProfile.user.username }}</p>
+            </div>
+          </div>
+          <div v-if="publicProfileData.coverUrl" class="profile-cover-image">
+            <img :src="publicProfileData.coverUrl" alt="个人主页封面">
+          </div>
+          <p class="profile-status">{{ publicProfileData.statusLine || "这个用户还没有写一句话状态。" }}</p>
+          <p class="profile-bio">{{ publicProfileData.bio || "这个用户还没有填写公开简介。" }}</p>
+          <div class="profile-chip-row">
+            <span v-if="publicProfileData.homeArea">常驻 {{ publicProfileData.homeArea }}</span>
+            <span>{{ typeLabel(publicProfileData.favoriteType || "all") }}</span>
+            <span v-if="publicProfileVisibility.stats">{{ publicProfile.stats.favoriteEvents.toLocaleString("ja-JP") }} 个活动</span>
+            <span v-if="publicProfileVisibility.stats">{{ publicProfile.stats.follows.toLocaleString("ja-JP") }} 个关注</span>
+          </div>
+          <div class="profile-tag-row">
+            <span v-for="tag in publicProfileTagRows" :key="tag">{{ tag }}</span>
+            <span v-if="publicProfileTagRows.length === 0">#Eventnote</span>
+          </div>
+          <div v-if="publicProfileVisibility.links" class="profile-link-list">
+            <a v-for="link in publicProfileLinkRows" :key="link.url" :href="link.url" target="_blank" rel="noreferrer">
+              <strong>{{ link.label }}</strong>
+              <span>{{ link.url }}</span>
+            </a>
+          </div>
+          <div v-if="publicProfileVisibility.contacts && publicProfileContactRows.length" class="profile-contact-list public-contact-list">
+            <div v-for="contact in publicProfileContactRows" :key="contact.label + contact.value">
+              <strong>{{ contact.label }}</strong>
+              <span>{{ contact.value }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="profile-dashboard">
+          <section v-if="publicProfileVisibility.stats" class="profile-summary">
+            <div class="metric"><span>公开活动数</span><strong>{{ publicProfile.stats.favoriteEvents.toLocaleString("ja-JP") }}</strong></div>
+            <div class="metric"><span>关注出演者</span><strong>{{ publicProfile.stats.favoriteArtists.toLocaleString("ja-JP") }}</strong></div>
+            <div class="metric"><span>关注作品</span><strong>{{ publicProfile.stats.favoriteWorks.toLocaleString("ja-JP") }}</strong></div>
+          </section>
+
+          <section v-if="publicProfileVisibility.follows" class="panel follow-panel">
+            <div class="panel-head">
+              <h2>公开关注</h2>
+              <span class="muted">展示部分出演者、作品和会场</span>
+            </div>
+            <div class="follow-grid">
+              <section>
+                <h3>出演者</h3>
+                <button v-for="artist in publicProfile.follows.artists" :key="artist.name" type="button" @click="openArtist(artist)">{{ artist.name }}</button>
+                <p v-if="publicProfile.follows.artists.length === 0" class="muted">还没有公开关注出演者。</p>
+              </section>
+              <section>
+                <h3>作品</h3>
+                <button v-for="work in publicProfile.follows.works" :key="work.title" type="button" @click="openWork(work)">{{ work.title }}</button>
+                <p v-if="publicProfile.follows.works.length === 0" class="muted">还没有公开关注作品。</p>
+              </section>
+              <section>
+                <h3>会场</h3>
+                <button v-for="venue in publicProfile.follows.venues" :key="venue.id" type="button" @click="openVenue(venue)">{{ displayVenue(venue.name) }}</button>
+                <p v-if="publicProfile.follows.venues.length === 0" class="muted">还没有公开关注会场。</p>
+              </section>
+            </div>
+          </section>
+
+          <section v-if="publicProfileVisibility.interests" class="panel profile-preview-section">
+            <div class="panel-head">
+              <h2>兴趣与推し</h2>
+            </div>
+            <div v-if="publicProfileInterestGroups.length" class="profile-interest-grid">
+              <article v-for="group in publicProfileInterestGroups" :key="group.category" class="profile-interest-card">
+                <span>{{ group.category }}</span>
+                <strong>{{ group.items[0]?.title }}</strong>
+                <p>{{ group.items[0]?.note || "还没有说明。" }}</p>
+              </article>
+            </div>
+            <p v-else class="muted">这个用户还没有公开兴趣内容。</p>
+          </section>
+        </section>
+      </template>
+    </section>
+
     <section v-if="page === 'notebook'" class="page-view notebook-page">
       <div class="page-title">
         <div>
@@ -1178,6 +1390,84 @@ const template = `
         </label>
         <button class="secondary-button" type="button" @click="saveMemo">保存笔记</button>
         <p class="save-state" aria-live="polite">{{ saveState }}</p>
+      </section>
+    </section>
+
+    <section v-if="page === 'admin'" class="page-view">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">Operations</p>
+          <h1>管理员审核</h1>
+        </div>
+      </div>
+
+      <section v-if="!authUser" class="panel empty-state">
+        <h2>需要登录</h2>
+        <p>请先登录管理员账号，再处理活动信息确认和用户提交内容。</p>
+        <button class="secondary-button" type="button" @click="go('profile')">去登录</button>
+      </section>
+
+      <section v-else-if="!authUser.isAdmin" class="panel empty-state">
+        <h2>当前账号没有管理员权限</h2>
+        <p>管理员入口只显示需要审核的活动纠错和近期问答，普通用户可以继续在活动详情页参与确认。</p>
+      </section>
+
+      <section v-else class="admin-dashboard">
+        <div class="source-summary">
+          <div class="metric"><span>待审核纠错</span><strong>{{ adminPendingCorrections.length }}</strong></div>
+          <div class="metric"><span>近期问答</span><strong>{{ adminRecentQuestions.length }}</strong></div>
+          <div class="metric"><span>当前管理员</span><strong>{{ authUser.displayName }}</strong></div>
+          <div class="metric"><span>状态</span><strong>{{ adminLoading ? "同步中" : "已同步" }}</strong></div>
+        </div>
+
+        <p v-if="adminError" class="save-state">{{ adminError }}</p>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>待审核纠错</h2>
+            <button class="ghost-button" type="button" @click="loadAdminModeration">刷新</button>
+          </div>
+          <div v-if="!adminPendingCorrections.length" class="empty-state small">暂时没有待审核纠错。</div>
+          <div v-else class="admin-review-list">
+            <article v-for="correction in adminPendingCorrections" :key="correction.id" class="admin-review-card">
+              <div>
+                <span>{{ correction.fieldLabel }}</span>
+                <h3>{{ correction.event?.title || correction.sourceEventId }}</h3>
+                <p>{{ correction.event?.date || "日期未标注" }} · {{ correction.event?.venue || "会场未详" }}</p>
+              </div>
+              <p class="admin-review-value">{{ correction.value }}</p>
+              <p v-if="correction.note">{{ correction.note }}</p>
+              <div class="admin-review-meta">
+                <span>{{ correction.author?.displayName || "活动用户" }}</span>
+                <span>{{ correction.confirmationCount }} 人确认</span>
+                <a v-if="correction.sourceUrl" :href="correction.sourceUrl" target="_blank" rel="noreferrer">来源</a>
+              </div>
+              <div class="correction-actions">
+                <button class="ghost-button" type="button" @click="openAdminEvent(correction.sourceEventId)">打开活动</button>
+                <button class="secondary-button" type="button" @click="reviewAdminCorrection(correction, 'confirmed')">确认</button>
+                <button class="ghost-button" type="button" @click="reviewAdminCorrection(correction, 'rejected')">驳回</button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>近期活动问答</h2>
+            <span class="muted">用于发现需要补充说明的活动</span>
+          </div>
+          <div v-if="!adminRecentQuestions.length" class="empty-state small">暂时没有用户提问。</div>
+          <div v-else class="admin-review-list">
+            <article v-for="question in adminRecentQuestions" :key="question.id" class="admin-review-card compact">
+              <div>
+                <span>{{ question.author?.displayName || "活动用户" }} · {{ question.answerCount }} 个回答</span>
+                <h3>{{ question.event?.title || question.sourceEventId }}</h3>
+                <p>{{ question.body }}</p>
+              </div>
+              <button class="ghost-button" type="button" @click="openAdminEvent(question.sourceEventId)">打开活动</button>
+            </article>
+          </div>
+        </section>
       </section>
     </section>
 
@@ -1228,6 +1518,7 @@ createApp({
       { id: "works", label: "作品", short: "作品" },
       { id: "venues", label: "会场", short: "会场" },
       { id: "sources", label: "来源", short: "来源" },
+      { id: "admin", label: "审核", short: "审核", adminOnly: true },
       { id: "favorites", label: "我的", short: "我的" }
     ];
 
@@ -1263,7 +1554,16 @@ createApp({
     const profileContactDraftRows = ref([]);
     const profileInterests = ref("");
     const profileInterestDraftRows = ref([]);
+    const profileVisibilityEnabled = ref(true);
+    const profileVisibilityLinks = ref(true);
+    const profileVisibilityContacts = ref(false);
+    const profileVisibilityInterests = ref(true);
+    const profileVisibilityFollows = ref(true);
+    const profileVisibilityStats = ref(true);
     const activeProfileInterest = ref("");
+    const publicProfile = ref(null);
+    const publicProfileError = ref("");
+    const publicProfileLoading = ref(false);
     const profileCopyState = ref("");
     const profileSaveState = ref("");
     const mySection = ref("overview");
@@ -1274,6 +1574,16 @@ createApp({
     const calendarFeedUrl = ref("");
     const calendarWebcalUrl = ref("");
     const eventExtra = ref({});
+    const eventInteractions = ref({ statusStats: { items: [], total: 0 }, questions: [], corrections: [], currentUser: null });
+    const questionDraft = ref("");
+    const correctionField = ref("venue");
+    const correctionValue = ref("");
+    const correctionSourceUrl = ref("");
+    const correctionNote = ref("");
+    const interactionSaveState = ref("");
+    const adminModeration = ref({ pendingCorrections: [], recentQuestions: [], currentUser: null });
+    const adminLoading = ref(false);
+    const adminError = ref("");
     const collapsedArtistLimit = 12;
     const events = ref([]);
     const dayEvents = ref([]);
@@ -1385,6 +1695,29 @@ createApp({
     const eventNoteStatusLabel = computed(() => {
       return eventNoteStatusOptions.find(([value]) => value === eventNoteStatus.value)?.[1] || "未记录";
     });
+    const eventStatusStats = computed(() => eventInteractions.value.statusStats?.items || []);
+    const eventQuestions = computed(() => eventInteractions.value.questions || []);
+    const eventCorrections = computed(() => eventInteractions.value.corrections || []);
+    const canReviewCorrections = computed(() => Boolean(eventInteractions.value.currentUser?.isAdmin));
+    const visibleNavItems = computed(() => navItems.filter((item) => !item.adminOnly || authUser.value?.isAdmin));
+    const adminPendingCorrections = computed(() => adminModeration.value.pendingCorrections || []);
+    const adminRecentQuestions = computed(() => adminModeration.value.recentQuestions || []);
+    const correctionFieldOptions = [
+      ["title", "标题"],
+      ["date", "日期"],
+      ["venue", "会场"],
+      ["artists", "出演者"],
+      ["time", "时间"],
+      ["ticket", "票务"],
+      ["source", "来源链接"],
+      ["type", "类型"],
+      ["other", "其他"]
+    ];
+    const correctionStatusLabel = (status) => ({
+      pending: "待确认",
+      confirmed: "已确认",
+      rejected: "已驳回"
+    }[status] || "待确认");
     const eventCardTags = (event) => {
       const city = String(event?.city || "").trim();
       const region = city && city !== "unknown" && city !== "未标注" ? city : "";
@@ -1434,6 +1767,42 @@ createApp({
       const active = activeProfileInterest.value || profileInterestGroups.value[0]?.category || "";
       return profileInterestGroups.value.find((group) => group.category === active)?.items || [];
     });
+    const publicProfileData = computed(() => publicProfile.value?.profile || {});
+    const publicProfileLinkRows = computed(() => {
+      return String(publicProfileData.value.links || "")
+        .split("\n")
+        .map(parseProfileLink)
+        .filter(Boolean)
+        .slice(0, 8);
+    });
+    const publicProfileContactRows = computed(() => {
+      return String(publicProfileData.value.contacts || "")
+        .split("\n")
+        .map(parseLabelValueRow)
+        .filter(Boolean)
+        .slice(0, 8);
+    });
+    const publicProfileTagRows = computed(() => {
+      return String(publicProfileData.value.tags || "")
+        .split(/[\n,，、]/)
+        .map((tag) => tag.trim().replace(/^#/, ""))
+        .filter(Boolean)
+        .slice(0, 12)
+        .map((tag) => `#${tag}`);
+    });
+    const publicProfileInterestGroups = computed(() => {
+      const groups = new Map();
+      for (const row of String(publicProfileData.value.interests || "").split("\n").map(parseInterestRow).filter(Boolean)) {
+        if (!groups.has(row.category)) groups.set(row.category, []);
+        groups.get(row.category).push(row);
+      }
+      return [...groups.entries()].map(([category, items]) => ({ category, items }));
+    });
+    const publicProfileUrl = computed(() => {
+      return authUser.value?.username ? `#/users/${encodeURIComponent(authUser.value.username)}` : "";
+    });
+    const publicProfileVisibility = computed(() => publicProfile.value?.visibility || {});
+    const isPublicProfilePage = computed(() => page.value === "users" || window.location.hash.startsWith("#/users/"));
     const isProfileEditPage = computed(() => page.value === "profile" && routeParam.value === "edit");
     const actionInfoSummary = computed(() => {
       if (eventExtra.value.price) return `票价：${eventExtra.value.price}`;
@@ -1637,8 +2006,16 @@ createApp({
         const payload = await getJson(`/api/calendar?${params}`);
         calendarDays.value = payload.days;
         calendarTotal.value = payload.total;
+        const firstMatchingDate = calendarDays.value[0]?.date || "";
         if (!isDateInCurrentMonth(selectedDate.value)) {
-          selectedDate.value = calendarDays.value[0]?.date || `${currentMonth.value}-01`;
+          selectedDate.value = firstMatchingDate || `${currentMonth.value}-01`;
+        } else if (payload.selectedTotal === 0 && firstMatchingDate && selectedDate.value !== firstMatchingDate) {
+          selectedDate.value = firstMatchingDate;
+        }
+        if (page.value === "events" && window.location.hash !== `#/events/${selectedDate.value}`) {
+          window.history.replaceState(null, "", `#/events/${selectedDate.value}`);
+          currentRouteKey = `events/${selectedDate.value}`;
+          routeParam.value = selectedDate.value;
         }
         if (payload.selectedDate === selectedDate.value) {
           dayEvents.value = payload.selectedItems || [];
@@ -1684,6 +2061,7 @@ createApp({
       showAllEventArtists.value = false;
       loadEventNote().catch(console.error);
       loadEventExtra().catch(console.error);
+      loadEventInteractions().catch(console.error);
     }
 
     async function loadEventExtra() {
@@ -1720,9 +2098,112 @@ createApp({
       eventNoteStatus.value = payload.note?.status || eventNoteStatus.value;
       eventNoteMemo.value = payload.note?.memo || "";
       eventNoteSaveState.value = "已保存";
+      loadEventInteractions().catch(console.error);
       window.setTimeout(() => {
         if (eventNoteSaveState.value === "已保存") eventNoteSaveState.value = "";
       }, 2200);
+    }
+
+    async function loadEventInteractions() {
+      if (!selectedEvent.value?.sourceEventId) return;
+      const payload = await getJson(`/api/event-interactions?sourceEventId=${encodeURIComponent(selectedEvent.value.sourceEventId)}`);
+      eventInteractions.value = payload;
+    }
+
+    async function submitQuestion() {
+      if (!authUser.value) return go("profile");
+      const body = questionDraft.value.trim();
+      if (!body || !selectedEvent.value?.sourceEventId) return;
+      interactionSaveState.value = "提交中...";
+      try {
+        eventInteractions.value = await postJson("/api/event-question", {
+          sourceEventId: selectedEvent.value.sourceEventId,
+          body
+        });
+        questionDraft.value = "";
+        interactionSaveState.value = "问题已提交";
+      } catch (error) {
+        interactionSaveState.value = error?.message || "提交失败";
+      }
+    }
+
+    async function submitAnswer(question) {
+      if (!authUser.value) return go("profile");
+      const body = String(question.answerDraft || "").trim();
+      if (!body) return;
+      interactionSaveState.value = "提交中...";
+      try {
+        eventInteractions.value = await postJson("/api/event-answer", {
+          questionId: question.id,
+          body
+        });
+        interactionSaveState.value = "回答已提交";
+      } catch (error) {
+        interactionSaveState.value = error?.message || "提交失败";
+      }
+    }
+
+    async function submitCorrection() {
+      if (!authUser.value) return go("profile");
+      const value = correctionValue.value.trim();
+      if (!value || !selectedEvent.value?.sourceEventId) return;
+      interactionSaveState.value = "提交中...";
+      try {
+        eventInteractions.value = await postJson("/api/event-correction", {
+          sourceEventId: selectedEvent.value.sourceEventId,
+          field: correctionField.value,
+          value,
+          note: correctionNote.value,
+          sourceUrl: correctionSourceUrl.value
+        });
+        correctionValue.value = "";
+        correctionNote.value = "";
+        correctionSourceUrl.value = "";
+        interactionSaveState.value = "纠错已提交";
+      } catch (error) {
+        interactionSaveState.value = error?.message || "提交失败";
+      }
+    }
+
+    async function confirmCorrection(correction) {
+      if (!authUser.value) return go("profile");
+      eventInteractions.value = await postJson("/api/event-correction-confirm", { id: correction.id });
+    }
+
+    async function reviewCorrection(correction, status) {
+      if (!canReviewCorrections.value) return;
+      eventInteractions.value = await postJson("/api/event-correction-review", { id: correction.id, status });
+    }
+
+    async function loadAdminModeration() {
+      if (!authUser.value?.isAdmin) return;
+      adminLoading.value = true;
+      adminError.value = "";
+      try {
+        adminModeration.value = await getJson("/api/admin/moderation");
+      } catch (error) {
+        adminError.value = error?.message || "审核数据读取失败";
+      } finally {
+        adminLoading.value = false;
+      }
+    }
+
+    async function reviewAdminCorrection(correction, status) {
+      if (!authUser.value?.isAdmin) return;
+      adminLoading.value = true;
+      adminError.value = "";
+      try {
+        adminModeration.value = await postJson("/api/admin/correction-review", { id: correction.id, status });
+      } catch (error) {
+        adminError.value = error?.message || "审核操作失败";
+      } finally {
+        adminLoading.value = false;
+      }
+    }
+
+    function openAdminEvent(sourceEventId) {
+      if (!sourceEventId) return;
+      window.location.hash = `#/event/${encodeURIComponent(sourceEventId)}`;
     }
 
     function currentRelatedQuery() {
@@ -1871,6 +2352,7 @@ createApp({
       authUser.value = payload.user || null;
       if (authUser.value) await Promise.all([loadFavorites(), loadProfile()]);
       if (authUser.value && selectedEvent.value) await loadEventNote();
+      if (authUser.value?.isAdmin && page.value === "admin") await loadAdminModeration();
     }
 
     async function loadFavorites() {
@@ -1903,6 +2385,20 @@ createApp({
       applyProfile(payload.profile || {});
     }
 
+    async function loadPublicProfile(username) {
+      publicProfileLoading.value = true;
+      publicProfileError.value = "";
+      try {
+        const payload = await getJson(`/api/users/${encodeURIComponent(username)}`);
+        publicProfile.value = payload;
+      } catch (error) {
+        publicProfile.value = null;
+        publicProfileError.value = error?.message || "公开主页加载失败";
+      } finally {
+        publicProfileLoading.value = false;
+      }
+    }
+
     async function loadCalendarFeed() {
       if (!authUser.value) return;
       const payload = await getJson("/api/calendar-feed");
@@ -1925,6 +2421,12 @@ createApp({
       profileContactDraftRows.value = profileContactRowsFromText(profile.contacts || "");
       profileInterests.value = profile.interests || "";
       profileInterestDraftRows.value = profileInterestRowsFromText(profile.interests || "");
+      profileVisibilityEnabled.value = profile.visibility?.enabled !== false;
+      profileVisibilityLinks.value = profile.visibility?.links !== false;
+      profileVisibilityContacts.value = profile.visibility?.contacts === true;
+      profileVisibilityInterests.value = profile.visibility?.interests !== false;
+      profileVisibilityFollows.value = profile.visibility?.follows !== false;
+      profileVisibilityStats.value = profile.visibility?.stats !== false;
       activeProfileInterest.value = profileInterestRows.value[0]?.category || "";
       if (authUser.value && profileDisplayName.value) {
         authUser.value = {
@@ -1951,7 +2453,15 @@ createApp({
           links: nextLinks,
           tags: profileTags.value,
           contacts: nextContacts,
-          interests: nextInterests
+          interests: nextInterests,
+          visibility: {
+            enabled: profileVisibilityEnabled.value,
+            links: profileVisibilityLinks.value,
+            contacts: profileVisibilityContacts.value,
+            interests: profileVisibilityInterests.value,
+            follows: profileVisibilityFollows.value,
+            stats: profileVisibilityStats.value
+          }
         };
         const payload = await postJson("/api/profile", nextProfile);
         applyProfile(payload.profile || nextProfile);
@@ -2090,6 +2600,7 @@ createApp({
         authUser.value = payload.user;
         authPassword.value = "";
         await Promise.all([loadFavorites(), loadProfile()]);
+        if (authUser.value?.isAdmin && page.value === "admin") await loadAdminModeration();
       } catch (error) {
         authError.value = error?.message || String(error);
       } finally {
@@ -2103,6 +2614,7 @@ createApp({
       try {
         await postJson("/api/auth/logout");
         authUser.value = null;
+        adminModeration.value = { pendingCorrections: [], recentQuestions: [], currentUser: null };
         calendarFeedUrl.value = "";
         calendarWebcalUrl.value = "";
         favoriteIds.value = new Set();
@@ -2458,6 +2970,7 @@ createApp({
           }
         }
         syncFavoriteCalendarSelection();
+        loadEventInteractions().catch(console.error);
       } catch (error) {
         authError.value = error?.message || String(error);
         console.error(error);
@@ -2527,6 +3040,10 @@ createApp({
         });
       } else if (nextPage === "event") {
         loadEventBySourceId(nextParam).catch(console.error);
+      } else if (nextPage === "users" || window.location.hash.startsWith("#/users/")) {
+        loadPublicProfile(nextParam).catch(console.error);
+      } else if (nextPage === "admin") {
+        loadAdminModeration().catch(console.error);
       } else {
         hydrateDirectoryRoute().catch(console.error);
       }
@@ -2542,6 +3059,8 @@ createApp({
           loading.value = false;
           console.error(error);
         });
+      } else if (page.value === "admin") {
+        loadAdminModeration().catch(console.error);
       }
     });
 
@@ -2597,6 +3116,8 @@ createApp({
       loadEventBySourceId(routeParamFromHash()).catch(console.error);
     } else if (page.value === "sources") {
       loadEvents().catch(console.error);
+    } else if (page.value === "users" || window.location.hash.startsWith("#/users/")) {
+      loadPublicProfile(routeParamFromHash()).catch(console.error);
     }
 
     function yearTotal(year) {
@@ -2702,8 +3223,13 @@ createApp({
       authPassword,
       authUser,
       authUsername,
+      adminError,
+      adminLoading,
+      adminPendingCorrections,
+      adminRecentQuestions,
       backFromEventDetail,
       budget,
+      canReviewCorrections,
       city,
       cityOptions,
       calendarCells,
@@ -2716,6 +3242,13 @@ createApp({
       collapsedArtistLimit,
       currentMonth,
       currentYear,
+      confirmCorrection,
+      correctionField,
+      correctionFieldOptions,
+      correctionNote,
+      correctionSourceUrl,
+      correctionStatusLabel,
+      correctionValue,
       dataSources,
       dayEventTotal,
       dayEvents,
@@ -2726,12 +3259,16 @@ createApp({
       eventType,
       events,
       eventDisplayTags,
+      eventCorrections,
       eventExtra,
+      eventInteractions,
       eventNoteStatusLabel,
       eventNoteMemo,
       eventNoteSaveState,
       eventNoteStatus,
       eventNoteStatusOptions,
+      eventQuestions,
+      eventStatusStats,
       favoriteArtists,
       favoriteCalendarCells,
       favoriteCalendarTitle,
@@ -2763,9 +3300,11 @@ createApp({
       isEntityFavorite,
       isJoined,
       isNavActive,
+      isPublicProfilePage,
       isProfileEditPage,
       loading,
       loadError,
+      loadAdminModeration,
       loadCalendarFeed,
       loadMoreRelatedEvents,
       loadingRelated,
@@ -2776,6 +3315,7 @@ createApp({
       mySection,
       navItems,
       nextPlanLabel,
+      openAdminEvent,
       openArtist,
       openArtistByName,
       openEvent,
@@ -2801,6 +3341,22 @@ createApp({
       profileInterestGroups,
       profileInterestRows,
       profileInterests,
+      profileVisibilityContacts,
+      profileVisibilityEnabled,
+      profileVisibilityFollows,
+      profileVisibilityInterests,
+      profileVisibilityLinks,
+      profileVisibilityStats,
+      publicProfile,
+      publicProfileContactRows,
+      publicProfileData,
+      publicProfileError,
+      publicProfileInterestGroups,
+      publicProfileLinkRows,
+      publicProfileLoading,
+      publicProfileTagRows,
+      publicProfileUrl,
+      publicProfileVisibility,
       profileLinkDraftRows,
       profileLinkRows,
       profileLinks,
@@ -2812,6 +3368,7 @@ createApp({
       activeProfileInterest,
       activeProfileInterestItems,
       query,
+      questionDraft,
       querySuggestions,
       quickSearch,
       relatedEvents,
@@ -2827,6 +3384,8 @@ createApp({
       removeProfileInterest,
       removeProfileLink,
       removeProfileTag,
+      reviewAdminCorrection,
+      reviewCorrection,
       saveEventNote,
       saveMemo,
       saveProfile,
@@ -2847,6 +3406,9 @@ createApp({
       showQuerySuggestions,
       logout,
       submitAuth,
+      submitAnswer,
+      submitCorrection,
+      submitQuestion,
       toggleEntityFavorite,
       toggleJoin,
       toggleRelatedSection,
@@ -2855,6 +3417,7 @@ createApp({
       upcomingFavoriteItems,
       venueHistoricalTotal,
       venues,
+      visibleNavItems,
       visibleArtists,
       visibleEventArtists,
       visibleVenues,

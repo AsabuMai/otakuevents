@@ -1,8 +1,9 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { createAuth } from "./server/auth.mjs";
+import { createLocalDb } from "./server/local-db.mjs";
 import {
   cleanEventRecord,
   isConcreteVenueName,
@@ -24,14 +25,11 @@ const catalogPath = join(dataRoot, "generated/eventernote-catalog.json");
 const latestPath = join(dataRoot, "generated/eventernote-latest.json");
 const venueNamesPath = join(dataRoot, "generated/venue-names.json");
 const eventVenueOverridesPath = join(dataRoot, "generated/event-venue-overrides.json");
-const localDataRoot = join(dataRoot, "local");
-const favoritesPath = join(localDataRoot, "favorites.json");
-const profilesPath = join(localDataRoot, "profiles.json");
-const eventNotesPath = join(localDataRoot, "event-notes.json");
 const generatedEventExtrasPath = join(dataRoot, "generated/event-extras.json");
-const localEventExtrasPath = join(localDataRoot, "event-extras.json");
+const localDb = createLocalDb({ dataRoot });
 const auth = createAuth({ dataRoot });
 let catalogCache;
+const rateLimitBuckets = new Map();
 
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -350,6 +348,50 @@ function sendJson(response, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function clientIp(request) {
+  const forwarded = String(request.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || request.socket.remoteAddress || "unknown";
+}
+
+function rateLimitRule(pathname, method) {
+  if (process.env.RATE_LIMIT_ENABLED === "0") return null;
+  if (pathname.startsWith("/api/auth/login") || pathname.startsWith("/api/auth/register")) {
+    return { key: "auth", limit: 20, windowMs: 15 * 60 * 1000 };
+  }
+  if (method !== "GET") {
+    return { key: "write", limit: 80, windowMs: 15 * 60 * 1000 };
+  }
+  if (pathname.startsWith("/api/suggest")) {
+    return { key: "suggest", limit: 240, windowMs: 60 * 1000 };
+  }
+  return { key: "api", limit: 600, windowMs: 60 * 1000 };
+}
+
+function checkRateLimit(request, pathname) {
+  const rule = rateLimitRule(pathname, request.method);
+  if (!rule) return { ok: true };
+  const now = Date.now();
+  const key = `${rule.key}:${clientIp(request)}`;
+  const bucket = rateLimitBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    rateLimitBuckets.set(key, { count: 1, resetAt: now + rule.windowMs });
+    return { ok: true };
+  }
+  bucket.count += 1;
+  if (bucket.count <= rule.limit) return { ok: true };
+  return {
+    ok: false,
+    retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))
+  };
+}
+
+function pruneRateLimitBuckets() {
+  const now = Date.now();
+  for (const [key, bucket] of rateLimitBuckets.entries()) {
+    if (bucket.resetAt <= now) rateLimitBuckets.delete(key);
+  }
+}
+
 function readJsonStore(path, fallback) {
   if (!existsSync(path)) return fallback;
   try {
@@ -359,13 +401,8 @@ function readJsonStore(path, fallback) {
   }
 }
 
-function writeJsonStore(path, value) {
-  mkdirSync(localDataRoot, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-}
-
 function readFavorites() {
-  const store = readJsonStore(favoritesPath, { users: {} });
+  const store = localDb.readFavoritesStore();
   if (!store || typeof store !== "object" || !store.users || typeof store.users !== "object") return { users: {} };
   for (const [userId, value] of Object.entries(store.users)) {
     if (Array.isArray(value)) {
@@ -434,8 +471,12 @@ function favoriteRowsForUser(catalog, userId) {
 }
 
 function readProfiles() {
-  const store = readJsonStore(profilesPath, { users: {} });
+  const store = localDb.readProfilesStore();
   return store && typeof store === "object" && store.users && typeof store.users === "object" ? store : { users: {} };
+}
+
+function readUsers() {
+  return localDb.readUsersStore();
 }
 
 function profileForUser(user, profile = {}) {
@@ -450,7 +491,71 @@ function profileForUser(user, profile = {}) {
     links: String(profile.links || "").slice(0, 600),
     tags: String(profile.tags || "").slice(0, 300),
     contacts: String(profile.contacts || "").slice(0, 500),
-    interests: String(profile.interests || "").slice(0, 1200)
+    interests: String(profile.interests || "").slice(0, 1200),
+    visibility: profileVisibility(profile.visibility)
+  };
+}
+
+function profileVisibility(value = {}) {
+  const visibility = value && typeof value === "object" ? value : {};
+  return {
+    enabled: visibility.enabled !== false,
+    links: visibility.links !== false,
+    contacts: visibility.contacts === true,
+    interests: visibility.interests !== false,
+    follows: visibility.follows !== false,
+    stats: visibility.stats !== false
+  };
+}
+
+function publicProfileForUsername(catalog, username) {
+  const normalized = String(username || "").trim().toLowerCase();
+  if (!normalized) return null;
+  const user = readUsers().users.find((row) => row.username === normalized);
+  if (!user) return null;
+
+  const profiles = readProfiles();
+  const profile = profileForUser(user, profiles.users[user.id]);
+  if (!profile.visibility.enabled) return null;
+  const favorites = favoriteRowsForUser(catalog, user.id);
+  const stats = {
+    favoriteEvents: favorites.items.length,
+    favoriteArtists: favorites.favoriteArtists.length,
+    favoriteWorks: favorites.favoriteWorks.length,
+    favoriteVenues: favorites.favoriteVenues.length,
+    follows: favorites.favoriteArtists.length + favorites.favoriteWorks.length + favorites.favoriteVenues.length
+  };
+  return {
+    user: {
+      username: user.username,
+      displayName: profile.displayName
+    },
+    profile: {
+      displayName: profile.displayName,
+      homeArea: profile.homeArea,
+      favoriteType: profile.favoriteType,
+      avatarUrl: profile.avatarUrl,
+      coverUrl: profile.coverUrl,
+      statusLine: profile.statusLine,
+      bio: profile.bio,
+      links: profile.visibility.links ? profile.links : "",
+      contacts: profile.visibility.contacts ? profile.contacts : "",
+      tags: profile.tags,
+      interests: profile.visibility.interests ? profile.interests : ""
+    },
+    visibility: profile.visibility,
+    stats: profile.visibility.stats ? stats : {
+      favoriteEvents: 0,
+      favoriteArtists: 0,
+      favoriteWorks: 0,
+      favoriteVenues: 0,
+      follows: 0
+    },
+    follows: {
+      artists: profile.visibility.follows ? favorites.favoriteArtists.slice(0, 12) : [],
+      works: profile.visibility.follows ? favorites.favoriteWorks.slice(0, 12) : [],
+      venues: profile.visibility.follows ? favorites.favoriteVenues.slice(0, 12) : []
+    }
   };
 }
 
@@ -459,7 +564,7 @@ function calendarTokenForUser(userId) {
   store.users[userId] = store.users[userId] || {};
   if (!store.users[userId].calendarToken) {
     store.users[userId].calendarToken = randomBytes(18).toString("base64url");
-    writeJsonStore(profilesPath, store);
+    localDb.writeProfilesStore(store);
   }
   return store.users[userId].calendarToken;
 }
@@ -535,7 +640,7 @@ function displayIcsVenue(event) {
 }
 
 function readEventNotes() {
-  const store = readJsonStore(eventNotesPath, { users: {} });
+  const store = localDb.readEventNotesStore();
   return store && typeof store === "object" && store.users && typeof store.users === "object" ? store : { users: {} };
 }
 
@@ -553,9 +658,190 @@ function sanitizeEventNote(body = {}) {
   };
 }
 
+function readInteractions() {
+  const store = localDb.readInteractionsStore();
+  return {
+    questions: Array.isArray(store.questions) ? store.questions : [],
+    corrections: Array.isArray(store.corrections) ? store.corrections : []
+  };
+}
+
+function writeInteractions(store) {
+  localDb.writeInteractionsStore({
+    questions: Array.isArray(store.questions) ? store.questions : [],
+    corrections: Array.isArray(store.corrections) ? store.corrections : []
+  });
+}
+
+function userDirectory() {
+  const users = readUsers().users;
+  const profiles = readProfiles().users || {};
+  return new Map(users.map((user) => {
+    const profile = profileForUser(user, profiles[user.id]);
+    return [user.id, {
+      id: user.id,
+      username: user.username,
+      displayName: profile.displayName,
+      avatarUrl: profile.avatarUrl,
+      isAdmin: isAdminUser(user)
+    }];
+  }));
+}
+
+function publicAuthor(userId, directory = userDirectory()) {
+  return directory.get(userId) || {
+    id: userId,
+    username: "unknown",
+    displayName: "活动用户",
+    avatarUrl: "",
+    isAdmin: false
+  };
+}
+
+function adminUsernames() {
+  return new Set(["admin", ...String(process.env.ADMIN_USERNAMES || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)]);
+}
+
+function isAdminUser(user) {
+  return adminUsernames().has(String(user?.username || "").toLowerCase());
+}
+
+function eventStatusStats(sourceEventId) {
+  const notes = readEventNotes();
+  const counts = { want: 0, ticketing: 0, done: 0 };
+  for (const userNotes of Object.values(notes.users || {})) {
+    const status = userNotes?.[sourceEventId]?.status;
+    if (status && Object.prototype.hasOwnProperty.call(counts, status)) counts[status] += 1;
+  }
+  return {
+    items: [
+      { status: "want", label: "想去", count: counts.want },
+      { status: "ticketing", label: "抽选/购票中", count: counts.ticketing },
+      { status: "done", label: "已参加", count: counts.done }
+    ],
+    total: counts.want + counts.ticketing + counts.done
+  };
+}
+
+function eventInteractionPayload(sourceEventId, currentUser = null) {
+  const store = readInteractions();
+  const directory = userDirectory();
+  const questions = store.questions
+    .filter((question) => question.sourceEventId === sourceEventId && !question.deletedAt)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .map((question) => ({
+      ...question,
+      author: publicAuthor(question.userId, directory),
+      answers: (question.answers || [])
+        .filter((answer) => !answer.deletedAt)
+        .map((answer) => ({
+          ...answer,
+          author: publicAuthor(answer.userId, directory)
+        }))
+    }));
+  const corrections = store.corrections
+    .filter((correction) => correction.sourceEventId === sourceEventId && !correction.deletedAt)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .map((correction) => ({
+      ...correction,
+      author: publicAuthor(correction.userId, directory),
+      confirmedByMe: currentUser ? (correction.confirmations || []).includes(currentUser.id) : false,
+      confirmationCount: (correction.confirmations || []).length
+    }));
+  return {
+    statusStats: eventStatusStats(sourceEventId),
+    questions,
+    corrections,
+    currentUser: currentUser ? {
+      username: currentUser.username,
+      displayName: currentUser.displayName,
+      isAdmin: isAdminUser(currentUser)
+    } : null
+  };
+}
+
+function eventSummaryBySourceId(catalog, sourceEventId) {
+  const event = catalog.indexes.eventsBySourceId.get(sourceEventId);
+  if (!event) return null;
+  return {
+    id: event.id,
+    sourceEventId: event.sourceEventId,
+    title: event.title,
+    date: event.date,
+    venue: event.venue,
+    type: event.type
+  };
+}
+
+function adminModerationPayload(catalog, currentUser) {
+  const store = readInteractions();
+  const directory = userDirectory();
+  const pendingCorrections = store.corrections
+    .filter((correction) => !correction.deletedAt && correction.status === "pending")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .map((correction) => ({
+      ...correction,
+      author: publicAuthor(correction.userId, directory),
+      event: eventSummaryBySourceId(catalog, correction.sourceEventId),
+      confirmationCount: (correction.confirmations || []).length
+    }));
+  const recentQuestions = store.questions
+    .filter((question) => !question.deletedAt)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, 30)
+    .map((question) => ({
+      ...question,
+      author: publicAuthor(question.userId, directory),
+      event: eventSummaryBySourceId(catalog, question.sourceEventId),
+      answerCount: (question.answers || []).filter((answer) => !answer.deletedAt).length
+    }));
+  return {
+    currentUser: {
+      username: currentUser.username,
+      displayName: currentUser.displayName,
+      isAdmin: true
+    },
+    pendingCorrections,
+    recentQuestions
+  };
+}
+
+function reviewCorrectionById(user, id, status) {
+  if (!["confirmed", "rejected"].includes(status)) return null;
+  const store = readInteractions();
+  const correction = store.corrections.find((row) => row.id === String(id || ""));
+  if (!correction) return null;
+  correction.status = status;
+  correction.reviewedBy = user.id;
+  correction.reviewedAt = new Date().toISOString();
+  writeInteractions(store);
+  return correction;
+}
+
+function ensureEventExists(catalog, sourceEventId) {
+  return sourceEventId && catalog.indexes.eventsBySourceId.has(sourceEventId);
+}
+
+function correctionFieldLabel(value) {
+  return {
+    title: "标题",
+    date: "日期",
+    venue: "会场",
+    artists: "出演者",
+    time: "时间",
+    ticket: "票务",
+    source: "来源链接",
+    type: "类型",
+    other: "其他"
+  }[value] || "其他";
+}
+
 function readEventExtras() {
   const generated = readJsonStore(generatedEventExtrasPath, { events: {} });
-  const local = readJsonStore(localEventExtrasPath, { events: {} });
+  const local = localDb.readLocalEventExtrasStore();
   return {
     events: {
       ...(generated.events && typeof generated.events === "object" ? generated.events : {}),
@@ -657,14 +943,14 @@ async function handleApi(request, pathname, searchParams, response) {
     ids.add(key);
     bucket[type] = [...ids];
     store.users[user.id] = bucket;
-    writeJsonStore(favoritesPath, store);
+    localDb.writeFavoritesStore(store);
     if (type === "events") {
       const notes = readEventNotes();
       const currentNote = notes.users[user.id]?.[key];
       if (!currentNote || currentNote.status === "none") {
         notes.users[user.id] = notes.users[user.id] || {};
         notes.users[user.id][key] = sanitizeEventNote({ status: "want", memo: currentNote?.memo || "" });
-        writeJsonStore(eventNotesPath, notes);
+        localDb.writeEventNotesStore(notes);
       }
     }
     sendJson(response, favoriteRowsForUser(catalog, user.id));
@@ -683,13 +969,13 @@ async function handleApi(request, pathname, searchParams, response) {
     ids.delete(key);
     bucket[type] = [...ids];
     store.users[user.id] = bucket;
-    writeJsonStore(favoritesPath, store);
+    localDb.writeFavoritesStore(store);
     if (type === "events") {
       const notes = readEventNotes();
       const currentNote = notes.users[user.id]?.[key];
       if (currentNote?.status === "want" && !currentNote.memo) {
         notes.users[user.id][key] = sanitizeEventNote({ status: "none", memo: "" });
-        writeJsonStore(eventNotesPath, notes);
+        localDb.writeEventNotesStore(notes);
       }
     }
     sendJson(response, favoriteRowsForUser(catalog, user.id));
@@ -713,8 +999,20 @@ async function handleApi(request, pathname, searchParams, response) {
       ...profileForUser(user, body),
       calendarToken: store.users[user.id]?.calendarToken
     };
-    writeJsonStore(profilesPath, store);
+    localDb.writeProfilesStore(store);
     sendJson(response, { profile: store.users[user.id] });
+    return true;
+  }
+
+  if (pathname.startsWith("/api/users/") && request.method === "GET") {
+    const username = pathname.slice("/api/users/".length);
+    const publicProfile = publicProfileForUsername(catalog, username);
+    if (!publicProfile) {
+      response.statusCode = 404;
+      sendJson(response, { error: "User not found" });
+      return true;
+    }
+    sendJson(response, publicProfile);
     return true;
   }
 
@@ -769,8 +1067,170 @@ async function handleApi(request, pathname, searchParams, response) {
     const store = readEventNotes();
     store.users[user.id] = store.users[user.id] || {};
     store.users[user.id][sourceEventId] = sanitizeEventNote(body);
-    writeJsonStore(eventNotesPath, store);
+    localDb.writeEventNotesStore(store);
     sendJson(response, { note: store.users[user.id][sourceEventId] });
+    return true;
+  }
+
+  if (pathname === "/api/event-interactions" && request.method === "GET") {
+    const sourceEventId = searchParams.get("sourceEventId") || "";
+    if (!ensureEventExists(catalog, sourceEventId)) {
+      response.statusCode = 404;
+      sendJson(response, { error: "Event not found" });
+      return true;
+    }
+    sendJson(response, eventInteractionPayload(sourceEventId, auth.getCurrentUser(request)));
+    return true;
+  }
+
+  if (pathname === "/api/event-question" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const sourceEventId = String(body.sourceEventId || "").trim();
+    const text = String(body.body || "").trim().slice(0, 220);
+    if (!ensureEventExists(catalog, sourceEventId) || !text) {
+      response.statusCode = 400;
+      sendJson(response, { error: "问题内容或活动不存在。" });
+      return true;
+    }
+    const store = readInteractions();
+    store.questions.push({
+      id: `question-${randomBytes(8).toString("hex")}`,
+      sourceEventId,
+      userId: user.id,
+      body: text,
+      answers: [],
+      createdAt: new Date().toISOString()
+    });
+    writeInteractions(store);
+    sendJson(response, eventInteractionPayload(sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/event-answer" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const questionId = String(body.questionId || "").trim();
+    const text = String(body.body || "").trim().slice(0, 260);
+    const store = readInteractions();
+    const question = store.questions.find((row) => row.id === questionId);
+    if (!question || !text) {
+      response.statusCode = 400;
+      sendJson(response, { error: "回答内容或问题不存在。" });
+      return true;
+    }
+    question.answers = Array.isArray(question.answers) ? question.answers : [];
+    question.answers.push({
+      id: `answer-${randomBytes(8).toString("hex")}`,
+      userId: user.id,
+      body: text,
+      createdAt: new Date().toISOString()
+    });
+    writeInteractions(store);
+    sendJson(response, eventInteractionPayload(question.sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/event-correction" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const sourceEventId = String(body.sourceEventId || "").trim();
+    const field = ["title", "date", "venue", "artists", "time", "ticket", "source", "type", "other"].includes(body.field) ? body.field : "other";
+    const value = String(body.value || "").trim().slice(0, 220);
+    const note = String(body.note || "").trim().slice(0, 220);
+    const sourceUrl = String(body.sourceUrl || "").trim().slice(0, 500);
+    if (!ensureEventExists(catalog, sourceEventId) || !value) {
+      response.statusCode = 400;
+      sendJson(response, { error: "纠错内容或活动不存在。" });
+      return true;
+    }
+    const store = readInteractions();
+    store.corrections.push({
+      id: `correction-${randomBytes(8).toString("hex")}`,
+      sourceEventId,
+      userId: user.id,
+      field,
+      fieldLabel: correctionFieldLabel(field),
+      value,
+      note,
+      sourceUrl,
+      status: "pending",
+      confirmations: [user.id],
+      createdAt: new Date().toISOString()
+    });
+    writeInteractions(store);
+    sendJson(response, eventInteractionPayload(sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/event-correction-confirm" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const store = readInteractions();
+    const correction = store.corrections.find((row) => row.id === String(body.id || ""));
+    if (!correction) {
+      response.statusCode = 404;
+      sendJson(response, { error: "纠错不存在。" });
+      return true;
+    }
+    correction.confirmations = Array.isArray(correction.confirmations) ? correction.confirmations : [];
+    if (!correction.confirmations.includes(user.id)) correction.confirmations.push(user.id);
+    writeInteractions(store);
+    sendJson(response, eventInteractionPayload(correction.sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/event-correction-review" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!isAdminUser(user)) {
+      response.statusCode = 403;
+      sendJson(response, { error: "需要管理员权限。" });
+      return true;
+    }
+    const body = await readJsonBody(request);
+    const correction = reviewCorrectionById(user, body.id, body.status);
+    if (!correction) {
+      response.statusCode = 400;
+      sendJson(response, { error: "纠错不存在或状态无效。" });
+      return true;
+    }
+    sendJson(response, eventInteractionPayload(correction.sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/admin/moderation" && request.method === "GET") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!isAdminUser(user)) {
+      response.statusCode = 403;
+      sendJson(response, { error: "需要管理员权限。" });
+      return true;
+    }
+    sendJson(response, adminModerationPayload(catalog, user));
+    return true;
+  }
+
+  if (pathname === "/api/admin/correction-review" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!isAdminUser(user)) {
+      response.statusCode = 403;
+      sendJson(response, { error: "需要管理员权限。" });
+      return true;
+    }
+    const body = await readJsonBody(request);
+    const correction = reviewCorrectionById(user, body.id, body.status);
+    if (!correction) {
+      response.statusCode = 400;
+      sendJson(response, { error: "纠错不存在或状态无效。" });
+      return true;
+    }
+    sendJson(response, adminModerationPayload(catalog, user));
     return true;
   }
 
@@ -1003,6 +1463,13 @@ createServer(async (request, response) => {
   const rawPath = decodeURIComponent(url.pathname);
 
   if (rawPath.startsWith("/api/")) {
+    const rateLimit = checkRateLimit(request, rawPath);
+    if (!rateLimit.ok) {
+      response.statusCode = 429;
+      response.setHeader("Retry-After", String(rateLimit.retryAfter));
+      sendJson(response, { error: "请求过于频繁，请稍后再试。" });
+      return;
+    }
     try {
       if (await auth.handleAuthApi(request, response, rawPath)) return;
     } catch (error) {
@@ -1035,3 +1502,5 @@ createServer(async (request, response) => {
 }).listen(port, host, () => {
   console.log(`Eventnote Japan running at http://${host}:${port}/`);
 });
+
+setInterval(pruneRateLimitBuckets, 60 * 1000).unref();

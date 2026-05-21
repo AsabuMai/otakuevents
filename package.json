@@ -17,7 +17,9 @@
     "sync:extras": "node scripts/sync-event-extras.mjs --start-date=2020-01-01",
     "clean:extras": "node scripts/clean-event-extras.mjs",
     "data:clean": "node scripts/build-eventernote-catalog.mjs && node scripts/clean-eventernote-latest.mjs",
-    "data:report": "node scripts/report-data-quality.mjs"
+    "data:report": "node scripts/report-data-quality.mjs",
+    "data:migrate-local": "node scripts/migrate-local-json-to-sqlite.mjs",
+    "backup:local": "node scripts/backup-local-data.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13"

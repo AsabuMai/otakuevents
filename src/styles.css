@@ -1315,6 +1315,168 @@ textarea:focus {
   align-items: end;
 }
 
+.event-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.event-status-grid div,
+.qa-card,
+.correction-card {
+  border: 1px solid rgba(139, 158, 148, 0.22);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.event-status-grid div {
+  padding: 14px;
+}
+
+.event-status-grid span,
+.qa-head span,
+.answer-list span,
+.correction-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.event-status-grid strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 26px;
+}
+
+.event-inline-form,
+.correction-form {
+  display: grid;
+  gap: 10px;
+}
+
+.event-inline-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.qa-list,
+.correction-list,
+.answer-list {
+  display: grid;
+  gap: 10px;
+}
+
+.qa-card,
+.correction-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.qa-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.qa-head em,
+.answer-list em {
+  color: var(--green);
+  font-style: normal;
+}
+
+.answer-list div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(250, 249, 245, 0.9);
+}
+
+.answer-list p,
+.correction-card p {
+  margin: 0;
+}
+
+.correction-form {
+  grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr) minmax(160px, 0.8fr);
+  align-items: end;
+}
+
+.correction-note-field {
+  grid-column: span 2;
+}
+
+.correction-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.correction-card.confirmed {
+  border-color: rgba(79, 106, 91, 0.42);
+}
+
+.correction-card.rejected {
+  opacity: 0.66;
+}
+
+.correction-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.admin-dashboard,
+.admin-review-list {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-review-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid rgba(139, 158, 148, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.admin-review-card.compact {
+  align-items: center;
+}
+
+.admin-review-card h3,
+.admin-review-card p {
+  margin: 0;
+}
+
+.admin-review-card h3 {
+  margin-top: 4px;
+  font-size: 17px;
+}
+
+.admin-review-card span,
+.admin-review-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.admin-review-value {
+  grid-column: 1 / -1;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(250, 249, 245, 0.9);
+  font-weight: 780;
+}
+
+.admin-review-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .event-note-memo {
   min-width: 0;
 }
@@ -1917,6 +2079,7 @@ textarea {
 
 .profile-link-list a,
 .profile-link-placeholder,
+.public-contact-list div,
 .profile-contact-list button {
   display: grid;
   gap: 4px;
@@ -1932,6 +2095,10 @@ textarea {
 .profile-contact-list button {
   text-align: left;
   cursor: pointer;
+}
+
+.public-contact-list div {
+  cursor: default;
 }
 
 .profile-link-list a:hover,
@@ -2089,6 +2256,47 @@ textarea {
   display: grid;
   grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1.4fr) auto;
   gap: 10px;
+}
+
+.profile-visibility-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(79, 106, 91, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.field-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.profile-visibility-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-visibility-grid label {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--ink);
+  border: 1px solid rgba(79, 106, 91, 0.18);
+  border-radius: 12px;
+  background: rgba(250, 249, 245, 0.92);
+  font-weight: 780;
+}
+
+.profile-visibility-grid input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--green);
 }
 
 .interest-editor {
@@ -2461,6 +2669,7 @@ textarea {
   .profile-identity-grid,
   .profile-contact-list,
   .profile-interest-grid,
+  .profile-visibility-grid,
   .inline-editor-row,
   .link-editor-row,
   .interest-editor-row {
@@ -2516,7 +2725,12 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .event-note-form {
+  .event-note-form,
+  .event-status-grid,
+  .event-inline-form,
+  .correction-form,
+  .correction-card,
+  .admin-review-card {
     grid-template-columns: 1fr;
   }
 
