@@ -729,17 +729,20 @@ function eventStatusStats(sourceEventId) {
 function eventInteractionPayload(sourceEventId, currentUser = null) {
   const store = readInteractions();
   const directory = userDirectory();
+  const currentUserIsAdmin = isAdminUser(currentUser);
   const questions = store.questions
     .filter((question) => question.sourceEventId === sourceEventId && !question.deletedAt)
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
     .map((question) => ({
       ...question,
       author: publicAuthor(question.userId, directory),
+      canDelete: Boolean(currentUser && (currentUserIsAdmin || question.userId === currentUser.id)),
       answers: (question.answers || [])
         .filter((answer) => !answer.deletedAt)
         .map((answer) => ({
           ...answer,
-          author: publicAuthor(answer.userId, directory)
+          author: publicAuthor(answer.userId, directory),
+          canDelete: Boolean(currentUser && (currentUserIsAdmin || answer.userId === currentUser.id))
         }))
     }));
   const corrections = store.corrections
@@ -749,7 +752,8 @@ function eventInteractionPayload(sourceEventId, currentUser = null) {
       ...correction,
       author: publicAuthor(correction.userId, directory),
       confirmedByMe: currentUser ? (correction.confirmations || []).includes(currentUser.id) : false,
-      confirmationCount: (correction.confirmations || []).length
+      confirmationCount: (correction.confirmations || []).length,
+      canHide: Boolean(currentUser && (currentUserIsAdmin || correction.userId === currentUser.id))
     }));
   return {
     statusStats: eventStatusStats(sourceEventId),
@@ -786,7 +790,8 @@ function adminModerationPayload(catalog, currentUser) {
       ...correction,
       author: publicAuthor(correction.userId, directory),
       event: eventSummaryBySourceId(catalog, correction.sourceEventId),
-      confirmationCount: (correction.confirmations || []).length
+      confirmationCount: (correction.confirmations || []).length,
+      canHide: true
     }));
   const recentQuestions = store.questions
     .filter((question) => !question.deletedAt)
@@ -796,7 +801,8 @@ function adminModerationPayload(catalog, currentUser) {
       ...question,
       author: publicAuthor(question.userId, directory),
       event: eventSummaryBySourceId(catalog, question.sourceEventId),
-      answerCount: (question.answers || []).filter((answer) => !answer.deletedAt).length
+      answerCount: (question.answers || []).filter((answer) => !answer.deletedAt).length,
+      canHide: true
     }));
   return {
     currentUser: {
@@ -819,6 +825,43 @@ function reviewCorrectionById(user, id, status) {
   correction.reviewedAt = new Date().toISOString();
   writeInteractions(store);
   return correction;
+}
+
+function canModerateRow(user, row) {
+  return Boolean(user && row && (isAdminUser(user) || row.userId === user.id));
+}
+
+function hideQuestionById(user, id) {
+  const store = readInteractions();
+  const question = store.questions.find((row) => row.id === String(id || "") && !row.deletedAt);
+  if (!question) return { status: 404, error: "问题不存在。" };
+  if (!canModerateRow(user, question)) return { status: 403, error: "没有权限隐藏这个问题。" };
+  question.deletedAt = new Date().toISOString();
+  writeInteractions(store);
+  return { question };
+}
+
+function hideAnswerById(user, id) {
+  const store = readInteractions();
+  for (const question of store.questions) {
+    const answer = (question.answers || []).find((row) => row.id === String(id || "") && !row.deletedAt);
+    if (!answer) continue;
+    if (!canModerateRow(user, answer)) return { status: 403, error: "没有权限删除这个回答。" };
+    answer.deletedAt = new Date().toISOString();
+    writeInteractions(store);
+    return { question, answer };
+  }
+  return { status: 404, error: "回答不存在。" };
+}
+
+function hideCorrectionById(user, id) {
+  const store = readInteractions();
+  const correction = store.corrections.find((row) => row.id === String(id || "") && !row.deletedAt);
+  if (!correction) return { status: 404, error: "纠错不存在。" };
+  if (!canModerateRow(user, correction)) return { status: 403, error: "没有权限隐藏这条纠错。" };
+  correction.deletedAt = new Date().toISOString();
+  writeInteractions(store);
+  return { correction };
 }
 
 function ensureEventExists(catalog, sourceEventId) {
@@ -1133,6 +1176,34 @@ async function handleApi(request, pathname, searchParams, response) {
     return true;
   }
 
+  if (pathname === "/api/event-question-delete" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const result = hideQuestionById(user, body.id);
+    if (!result.question) {
+      response.statusCode = result.status || 400;
+      sendJson(response, { error: result.error || "删除失败。" });
+      return true;
+    }
+    sendJson(response, eventInteractionPayload(result.question.sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/event-answer-delete" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const result = hideAnswerById(user, body.id);
+    if (!result.answer) {
+      response.statusCode = result.status || 400;
+      sendJson(response, { error: result.error || "删除失败。" });
+      return true;
+    }
+    sendJson(response, eventInteractionPayload(result.question.sourceEventId, user));
+    return true;
+  }
+
   if (pathname === "/api/event-correction" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;
@@ -1163,6 +1234,20 @@ async function handleApi(request, pathname, searchParams, response) {
     });
     writeInteractions(store);
     sendJson(response, eventInteractionPayload(sourceEventId, user));
+    return true;
+  }
+
+  if (pathname === "/api/event-correction-hide" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const body = await readJsonBody(request);
+    const result = hideCorrectionById(user, body.id);
+    if (!result.correction) {
+      response.statusCode = result.status || 400;
+      sendJson(response, { error: result.error || "隐藏失败。" });
+      return true;
+    }
+    sendJson(response, eventInteractionPayload(result.correction.sourceEventId, user));
     return true;
   }
 
@@ -1228,6 +1313,44 @@ async function handleApi(request, pathname, searchParams, response) {
     if (!correction) {
       response.statusCode = 400;
       sendJson(response, { error: "纠错不存在或状态无效。" });
+      return true;
+    }
+    sendJson(response, adminModerationPayload(catalog, user));
+    return true;
+  }
+
+  if (pathname === "/api/admin/question-hide" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!isAdminUser(user)) {
+      response.statusCode = 403;
+      sendJson(response, { error: "需要管理员权限。" });
+      return true;
+    }
+    const body = await readJsonBody(request);
+    const result = hideQuestionById(user, body.id);
+    if (!result.question) {
+      response.statusCode = result.status || 400;
+      sendJson(response, { error: result.error || "隐藏失败。" });
+      return true;
+    }
+    sendJson(response, adminModerationPayload(catalog, user));
+    return true;
+  }
+
+  if (pathname === "/api/admin/correction-hide" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!isAdminUser(user)) {
+      response.statusCode = 403;
+      sendJson(response, { error: "需要管理员权限。" });
+      return true;
+    }
+    const body = await readJsonBody(request);
+    const result = hideCorrectionById(user, body.id);
+    if (!result.correction) {
+      response.statusCode = result.status || 400;
+      sendJson(response, { error: result.error || "隐藏失败。" });
       return true;
     }
     sendJson(response, adminModerationPayload(catalog, user));

@@ -238,6 +238,11 @@ try {
   }, register.cookie);
   assert.equal(answer.data.questions[0].answers.length, 1);
 
+  const deletedAnswer = await postJson("/api/event-answer-delete", {
+    id: answer.data.questions[0].answers[0].id
+  }, register.cookie);
+  assert.equal(deletedAnswer.data.questions[0].answers.length, 0);
+
   const correction = await postJson("/api/event-correction", {
     sourceEventId: "1",
     field: "venue",
@@ -254,6 +259,20 @@ try {
   }, register.cookie);
   assert.equal(confirmCorrection.data.corrections[0].confirmationCount, 1);
 
+  const questionToHide = await postJson("/api/event-question", {
+    sourceEventId: "1",
+    body: "配信はありますか？"
+  }, register.cookie);
+  assert.equal(questionToHide.data.questions.length, 2);
+
+  const correctionToHide = await postJson("/api/event-correction", {
+    sourceEventId: "1",
+    field: "time",
+    value: "18:30",
+    note: "hidden by admin in smoke"
+  }, register.cookie);
+  assert.equal(correctionToHide.data.corrections.length, 2);
+
   const admin = await postJson("/api/auth/register", {
     username: "admin_user",
     displayName: "Admin User",
@@ -262,23 +281,42 @@ try {
   assert.equal(admin.data.user.isAdmin, true);
 
   const moderation = await getJsonWithCookie("/api/admin/moderation", admin.cookie);
-  assert.equal(moderation.pendingCorrections.length, 1);
-  assert.equal(moderation.recentQuestions.length, 1);
+  assert.equal(moderation.pendingCorrections.length, 2);
+  assert.equal(moderation.recentQuestions.length, 2);
 
   await postJsonExpect("/api/admin/correction-review", {
     id: correction.data.corrections[0].id,
     status: "confirmed"
   }, 403, register.cookie);
 
+  await postJsonExpect("/api/admin/correction-hide", {
+    id: correctionToHide.data.corrections[0].id
+  }, 403, register.cookie);
+
   const reviewed = await postJson("/api/admin/correction-review", {
     id: correction.data.corrections[0].id,
     status: "confirmed"
   }, admin.cookie);
-  assert.equal(reviewed.data.pendingCorrections.length, 0);
+  assert.equal(reviewed.data.pendingCorrections.length, 1);
+
+  const hiddenQuestion = await postJson("/api/admin/question-hide", {
+    id: questionToHide.data.questions[0].id
+  }, admin.cookie);
+  assert.equal(hiddenQuestion.data.recentQuestions.length, 1);
+
+  const hiddenCorrection = await postJson("/api/admin/correction-hide", {
+    id: correctionToHide.data.corrections[0].id
+  }, admin.cookie);
+  assert.equal(hiddenCorrection.data.pendingCorrections.length, 0);
 
   const interactions = await getJsonWithCookie("/api/event-interactions?sourceEventId=1", admin.cookie);
   assert.equal(interactions.currentUser.isAdmin, true);
   assert.equal(interactions.corrections[0].status, "confirmed");
+
+  const deletedQuestion = await postJson("/api/event-question-delete", {
+    id: question.data.questions[0].id
+  }, register.cookie);
+  assert.equal(deletedQuestion.data.questions.length, 0);
 
   const logout = await postJson("/api/auth/logout", {}, register.cookie);
   assert.equal(logout.data.ok, true);

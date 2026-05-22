@@ -238,6 +238,21 @@ h2 {
   backdrop-filter: blur(14px);
 }
 
+.ghost-button.danger,
+.text-button.danger {
+  color: #9a3f35;
+}
+
+.text-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  color: var(--accent-deep);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 820;
+}
+
 main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -1376,6 +1391,14 @@ textarea:focus {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.qa-meta-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .qa-head em,

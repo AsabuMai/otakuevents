@@ -393,12 +393,18 @@ const template = `
             <article v-for="question in eventQuestions" :key="question.id" class="qa-card">
               <div class="qa-head">
                 <strong>{{ question.body }}</strong>
-                <span>{{ question.author.displayName }} <em v-if="question.author.isAdmin">管理员</em></span>
+                <div class="qa-meta-actions">
+                  <span>{{ question.author.displayName }} <em v-if="question.author.isAdmin">管理员</em></span>
+                  <button v-if="question.canDelete" class="text-button danger" type="button" @click="deleteQuestion(question)">删除</button>
+                </div>
               </div>
               <div v-if="question.answers.length" class="answer-list">
                 <div v-for="answer in question.answers" :key="answer.id">
                   <p>{{ answer.body }}</p>
-                  <span>{{ answer.author.displayName }} <em v-if="answer.author.isAdmin">管理员</em></span>
+                  <span>
+                    {{ answer.author.displayName }} <em v-if="answer.author.isAdmin">管理员</em>
+                    <button v-if="answer.canDelete" class="text-button danger" type="button" @click="deleteAnswer(answer)">删除</button>
+                  </span>
                 </div>
               </div>
               <form class="event-inline-form compact" @submit.prevent="submitAnswer(question)">
@@ -451,6 +457,7 @@ const template = `
                 </button>
                 <button v-if="canReviewCorrections && correction.status === 'pending'" class="secondary-button" type="button" @click="reviewCorrection(correction, 'confirmed')">确认</button>
                 <button v-if="canReviewCorrections && correction.status === 'pending'" class="ghost-button" type="button" @click="reviewCorrection(correction, 'rejected')">驳回</button>
+                <button v-if="correction.canHide" class="ghost-button danger" type="button" @click="hideCorrection(correction)">隐藏</button>
               </div>
             </article>
             <p v-if="eventCorrections.length === 0" class="muted">还没有纠错记录。用户提交后可由其他人确认，管理员可最终确认或驳回。</p>
@@ -1446,6 +1453,7 @@ const template = `
                 <button class="ghost-button" type="button" @click="openAdminEvent(correction.sourceEventId)">打开活动</button>
                 <button class="secondary-button" type="button" @click="reviewAdminCorrection(correction, 'confirmed')">确认</button>
                 <button class="ghost-button" type="button" @click="reviewAdminCorrection(correction, 'rejected')">驳回</button>
+                <button class="ghost-button danger" type="button" @click="hideAdminCorrection(correction)">隐藏</button>
               </div>
             </article>
           </div>
@@ -1464,7 +1472,10 @@ const template = `
                 <h3>{{ question.event?.title || question.sourceEventId }}</h3>
                 <p>{{ question.body }}</p>
               </div>
-              <button class="ghost-button" type="button" @click="openAdminEvent(question.sourceEventId)">打开活动</button>
+              <div class="correction-actions">
+                <button class="ghost-button" type="button" @click="openAdminEvent(question.sourceEventId)">打开活动</button>
+                <button class="ghost-button danger" type="button" @click="hideAdminQuestion(question)">隐藏</button>
+              </div>
             </article>
           </div>
         </section>
@@ -2175,6 +2186,21 @@ createApp({
       eventInteractions.value = await postJson("/api/event-correction-review", { id: correction.id, status });
     }
 
+    async function deleteQuestion(question) {
+      if (!question?.canDelete) return;
+      eventInteractions.value = await postJson("/api/event-question-delete", { id: question.id });
+    }
+
+    async function deleteAnswer(answer) {
+      if (!answer?.canDelete) return;
+      eventInteractions.value = await postJson("/api/event-answer-delete", { id: answer.id });
+    }
+
+    async function hideCorrection(correction) {
+      if (!correction?.canHide) return;
+      eventInteractions.value = await postJson("/api/event-correction-hide", { id: correction.id });
+    }
+
     async function loadAdminModeration() {
       if (!authUser.value?.isAdmin) return;
       adminLoading.value = true;
@@ -2196,6 +2222,32 @@ createApp({
         adminModeration.value = await postJson("/api/admin/correction-review", { id: correction.id, status });
       } catch (error) {
         adminError.value = error?.message || "审核操作失败";
+      } finally {
+        adminLoading.value = false;
+      }
+    }
+
+    async function hideAdminQuestion(question) {
+      if (!authUser.value?.isAdmin) return;
+      adminLoading.value = true;
+      adminError.value = "";
+      try {
+        adminModeration.value = await postJson("/api/admin/question-hide", { id: question.id });
+      } catch (error) {
+        adminError.value = error?.message || "隐藏失败";
+      } finally {
+        adminLoading.value = false;
+      }
+    }
+
+    async function hideAdminCorrection(correction) {
+      if (!authUser.value?.isAdmin) return;
+      adminLoading.value = true;
+      adminError.value = "";
+      try {
+        adminModeration.value = await postJson("/api/admin/correction-hide", { id: correction.id });
+      } catch (error) {
+        adminError.value = error?.message || "隐藏失败";
       } finally {
         adminLoading.value = false;
       }
@@ -3252,6 +3304,8 @@ createApp({
       dataSources,
       dayEventTotal,
       dayEvents,
+      deleteAnswer,
+      deleteQuestion,
       directorySuggestions,
       directoryQuery,
       eventBackLabel,
@@ -3295,6 +3349,9 @@ createApp({
       go,
       hideSuggestions,
       hideSuggestionsSoon,
+      hideAdminCorrection,
+      hideAdminQuestion,
+      hideCorrection,
       isConcreteWorkTitle,
       isAccountPage,
       isEntityFavorite,
