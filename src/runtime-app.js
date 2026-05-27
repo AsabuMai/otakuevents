@@ -28,6 +28,40 @@ const template = `
         {{ item.label }}
       </a>
     </nav>
+    <form class="top-search" role="search" @submit.prevent="submitGlobalSearch">
+      <div class="top-search-wrap">
+        <input
+          v-model="globalQuery"
+          type="search"
+          placeholder="ラブライブ"
+          aria-label="全局搜索"
+          @focus="showGlobalSuggestions = true"
+          @input="handleGlobalInput"
+          @keydown.enter="submitGlobalSearch"
+          @blur="hideGlobalSuggestionsSoon"
+        >
+        <button type="submit" aria-label="搜索">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-4.4-4.4"></path><circle cx="11" cy="11" r="7"></circle></svg>
+        </button>
+        <div v-if="showGlobalSuggestions && hasGlobalSuggestions" class="global-suggestion-panel">
+          <section v-for="group in globalSuggestionGroups" :key="group.id">
+            <h3>{{ group.label }}</h3>
+            <button v-for="suggestion in group.items" :key="suggestion.type + suggestion.value" type="button" @pointerdown.prevent="applyGlobalSuggestion(suggestion)">
+              <span>
+                <template v-for="(part, index) in suggestionParts(suggestion.value, globalQuery)" :key="index">
+                  <mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template>
+                </template>
+              </span>
+              <small>{{ suggestion.meta || suggestion.label }}</small>
+            </button>
+          </section>
+          <button v-for="suggestion in globalSuggestions" :key="suggestion" type="button" @pointerdown.prevent="applyGlobalSuggestion(suggestion)">
+            <span>{{ suggestion }}</span>
+            <small>搜索</small>
+          </button>
+        </div>
+      </div>
+    </form>
     <div class="top-actions">
       <button class="ghost-button account-chip" type="button" @click="go('profile')">
         {{ authUser ? authUser.displayName : "登录" }}
@@ -35,8 +69,8 @@ const template = `
     </div>
   </header>
 
-  <nav v-if="!isAccountPage" class="mobile-tabs" aria-label="移动导航">
-    <a v-for="item in visibleNavItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id) }" @click="go(item.id)">
+  <nav v-if="!isAccountPage && page !== 'event'" class="mobile-tabs" aria-label="移动导航">
+    <a v-for="item in mobileNavItems" :key="item.id" :href="\`#/\${item.id}\`" :class="{ active: isNavActive(item.id), add: item.add }" @click="go(item.id)">
       {{ item.short }}
     </a>
   </nav>
@@ -72,6 +106,19 @@ const template = `
         <div class="metric"><span>出演者</span><strong>{{ meta.artists?.toLocaleString("ja-JP") || "..." }}</strong></div>
         <div class="metric"><span>会场</span><strong>{{ meta.venues?.toLocaleString("ja-JP") || "..." }}</strong></div>
         <div class="metric"><span>当前月活动</span><strong>{{ calendarTotal.toLocaleString("ja-JP") }}</strong></div>
+      </section>
+
+      <section class="home-intent-strip">
+        <div>
+          <span>{{ authUser ? "管理模式" : "发现模式" }}</span>
+          <strong>{{ authUser ? "先处理近期计划" : "先从搜索和日历找到活动" }}</strong>
+          <p>{{ authUser ? "收藏、状态和日历同步会集中在我的活动里。" : "不登录也能查活动；登录后再把想去的活动沉淀成计划。" }}</p>
+        </div>
+        <div>
+          <span>数据新鲜度</span>
+          <strong>{{ dataFreshnessLabel }}</strong>
+          <p>{{ dataFreshnessSummary }}</p>
+        </div>
       </section>
 
       <section class="management-strip">
@@ -111,7 +158,7 @@ const template = `
               </div>
               <div>
                 <h3 class="event-title">{{ event.title }}</h3>
-                <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span></div>
                 <div v-if="eventCardTags(event).length" class="tag-row">
                   <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
                 </div>
@@ -153,34 +200,62 @@ const template = `
       </section>
     </section>
 
-    <section v-if="page === 'events'" class="page-view">
-      <div class="page-title">
-        <div>
-          <p class="eyebrow">Schedule</p>
-          <h1>活动</h1>
+    <section v-if="page === 'events'" class="page-view events-workspace">
+      <div class="workspace-topline">
+        <div class="month-switcher">
+          <button class="icon-button" type="button" aria-label="上个月" @click="changeMonth(-1)">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+          </button>
+          <div>
+            <strong>{{ calendarTitle }}</strong>
+            <span>{{ calendarTotal.toLocaleString("ja-JP") }} 场匹配活动</span>
+          </div>
+          <button class="icon-button" type="button" aria-label="下个月" @click="changeMonth(1)">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
+          </button>
         </div>
+        <button class="primary-button desktop-add-button" type="button" @click="authUser ? go('favorites') : go('profile')">+ 添加活动</button>
       </div>
 
-      <form class="filter-bar" @submit.prevent>
+      <form class="filter-bar" :class="{ expanded: showMobileFilters }" @submit.prevent>
         <label class="search-field">
           <span>关键词</span>
           <div class="search-input-wrap">
             <input v-model="query" type="search" placeholder="声优、作品、会场" @focus="showQuerySuggestions = true" @keydown.enter="hideSuggestions" @change="hideSuggestions" @blur="hideSuggestionsSoon">
             <button v-if="query" class="clear-search-button" type="button" aria-label="清空关键词" @click="query = ''">x</button>
-            <div v-if="showQuerySuggestions && querySuggestions.length" class="suggestion-list">
+            <div v-if="showQuerySuggestions && hasQuerySuggestions" class="suggestion-list grouped-suggestion-list">
+              <section v-for="group in querySuggestionGroups" :key="group.id">
+                <h3>{{ group.label }}</h3>
+                <button v-for="suggestion in group.items" :key="suggestion.type + suggestion.value" type="button" @pointerdown.prevent="applyQuerySuggestion(suggestion)">
+                  <span>
+                    <template v-for="(part, index) in suggestionParts(suggestion.value, query)" :key="index">
+                      <mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template>
+                    </template>
+                  </span>
+                  <small>{{ suggestion.meta || suggestion.label }}</small>
+                </button>
+              </section>
               <button v-for="suggestion in querySuggestions" :key="suggestion" type="button" @pointerdown.prevent="applyQuerySuggestion(suggestion)">
-                {{ suggestion }}
+                <span>
+                  <template v-for="(part, index) in suggestionParts(suggestion, query)" :key="index">
+                    <mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template>
+                  </template>
+                </span>
+                <small>搜索</small>
               </button>
             </div>
           </div>
         </label>
-        <label class="search-field">
+        <button class="mobile-filter-toggle" type="button" :class="{ active: city !== 'all' || eventType !== 'all' }" @click="showMobileFilters = !showMobileFilters">
+          筛选
+        </button>
+        <label class="search-field advanced-filter">
           <span>地区</span>
           <select v-model="city">
             <option v-for="[value, label] in cityOptions" :key="value" :value="value">{{ label }}</option>
           </select>
         </label>
-        <label class="search-field">
+        <label class="search-field advanced-filter">
           <span>类型</span>
           <select v-model="eventType">
             <option v-for="[value, label] in typeOptions" :key="value" :value="value">{{ label }}</option>
@@ -189,76 +264,245 @@ const template = `
         <p v-if="loadError" class="load-error">{{ loadError }}</p>
       </form>
 
-      <section class="calendar-panel">
-        <p v-if="loadError" class="load-error calendar-error">{{ loadError }}</p>
-        <div class="calendar-head">
-          <button class="icon-button" type="button" aria-label="上个月" @click="changeMonth(-1)">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
-          </button>
-          <div>
-            <p class="eyebrow">Calendar</p>
-            <div class="calendar-title-row">
-              <h2>{{ Number(currentMonth.slice(5, 7)) }}月</h2>
-              <label class="compact-year-select" aria-label="选择年份">
-                <select :value="currentYear" @change="setYear($event.target.value)">
-                  <option v-for="year in yearOptions" :key="year" :value="year">{{ year }}年</option>
-                </select>
-              </label>
-            </div>
-            <p class="muted">本月 {{ calendarTotal.toLocaleString("ja-JP") }} 场匹配活动</p>
-          </div>
-          <button class="icon-button" type="button" aria-label="下个月" @click="changeMonth(1)">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
-          </button>
-        </div>
-        <div class="calendar-weekdays">
-          <span v-for="day in weekdays" :key="day">{{ day }}</span>
-        </div>
-        <div class="calendar-grid">
-          <a
-            v-for="day in calendarCells"
-            :key="day.key"
-            :href="\`#/events/\${day.date}\`"
-            class="calendar-day"
-            :class="{ muted: !day.inMonth, active: day.date === selectedDate, hasEvents: day.count > 0 }"
-            :data-calendar-date="day.date"
-            @click="selectDate(day.date)"
-          >
-            <span>{{ day.day }}</span>
-            <strong v-if="day.count > 0">{{ day.count }}</strong>
-            <small v-if="day.samples.length">{{ day.samples[0].title }}</small>
-          </a>
-        </div>
-      </section>
+      <div class="event-workbench">
+        <div class="events-main-column">
+          <section class="desktop-date-strip" aria-label="日期选择">
+            <button
+              v-for="day in desktopDateStrip"
+              :key="day.key"
+              type="button"
+              :class="{ active: day.date === selectedDate, muted: !day.inMonth }"
+              @click="selectDate(day.date)"
+            >
+              <span>{{ day.weekday }}</span>
+              <strong>{{ day.day }}</strong>
+              <small>{{ day.count || "-" }}</small>
+            </button>
+          </section>
 
-      <div class="section-head day-head">
-        <div>
-          <p class="eyebrow">Day events</p>
-          <h2>{{ selectedDateLabel }}</h2>
-        </div>
-        <span class="muted">{{ dayEventTotal.toLocaleString("ja-JP") }} 场</span>
-      </div>
+          <section class="calendar-panel mobile-calendar-panel">
+            <p v-if="loadError" class="load-error calendar-error">{{ loadError }}</p>
+            <div class="calendar-head">
+              <button class="icon-button" type="button" aria-label="上个月" @click="changeMonth(-1)">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+              </button>
+              <div>
+                <p class="eyebrow">Calendar</p>
+                <div class="calendar-title-row">
+                  <h2>{{ Number(currentMonth.slice(5, 7)) }}月</h2>
+                  <label class="compact-year-select" aria-label="选择年份">
+                    <select :value="currentYear" @change="setYear($event.target.value)">
+                      <option v-for="year in yearOptions" :key="year" :value="year">{{ year }}年</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="muted">本月 {{ calendarTotal.toLocaleString("ja-JP") }} 场匹配活动</p>
+              </div>
+              <button class="icon-button" type="button" aria-label="下个月" @click="changeMonth(1)">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
+              </button>
+            </div>
+            <div class="calendar-weekdays">
+              <span v-for="day in weekdays" :key="day">{{ day }}</span>
+            </div>
+            <div class="calendar-grid">
+              <a
+                v-for="day in calendarCells"
+                :key="day.key"
+                :href="\`#/events/\${day.date}\`"
+                class="calendar-day"
+                :class="{ muted: !day.inMonth, active: day.date === selectedDate, hasEvents: day.count > 0 }"
+                :data-calendar-date="day.date"
+                @click="selectDate(day.date)"
+              >
+                <span>{{ day.day }}</span>
+                <strong v-if="day.count > 0">{{ day.count }}</strong>
+                <small v-if="day.samples.length">{{ day.samples[0].title }}</small>
+              </a>
+            </div>
+          </section>
 
-      <div class="event-list">
-        <article v-for="event in dayEvents" :key="event.id" class="event-card clickable-card" tabindex="0" role="button" @click="openEvent(event)" @keydown.enter.prevent="openEvent(event)">
-          <div class="date-box">
-            <div><span>{{ formatDate(event.date).month }} {{ formatDate(event.date).weekday }}</span><strong>{{ formatDate(event.date).day }}</strong></div>
+          <div class="status-tabs" aria-label="活动状态筛选">
+            <button
+              v-for="item in eventListFilterOptions"
+              :key="item.id"
+              type="button"
+              :class="{ active: eventListFilter === item.id }"
+              @click="eventListFilter = item.id"
+            >
+              <span>{{ item.label }}</span>
+              <strong>{{ item.count.toLocaleString("ja-JP") }}</strong>
+            </button>
           </div>
-          <div>
-            <h3 class="event-title">{{ event.title }}</h3>
-            <div class="event-meta">
-              <span v-if="isConcreteWorkTitle(event.work)">{{ event.work }}</span>
-              <span>{{ displayVenue(event.venue) }}</span>
-              <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
+
+          <div class="section-head day-head">
+            <div>
+              <p class="eyebrow">Day events</p>
+              <h2>{{ selectedDateLabel }}</h2>
             </div>
-            <div v-if="eventCardTags(event).length" class="tag-row">
-              <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
+            <span class="muted">{{ filteredDayEvents.length.toLocaleString("ja-JP") }} / {{ dayEventTotal.toLocaleString("ja-JP") }} 场</span>
+          </div>
+
+          <div class="event-list desktop-event-list">
+            <article
+              v-for="event in filteredDayEvents"
+              :key="event.id"
+              class="event-card desktop-event-row clickable-card"
+              :class="{ selected: selectedEvent?.sourceEventId === event.sourceEventId }"
+              tabindex="0"
+              role="button"
+              @click="openEventInline(event)"
+              @keydown.enter.prevent="openEventInline(event)"
+            >
+              <div class="desktop-date-cell">
+                <strong>{{ compactMonthDay(event.date) }}</strong>
+                <span>{{ formatDate(event.date).weekday }}</span>
+              </div>
+              <div>
+                <div class="event-row-title">
+                  <span class="tag status-tag">{{ typeLabel(event.type) }}</span>
+                  <h3 class="event-title">{{ event.title }}</h3>
+                </div>
+                <div class="event-meta">
+                  <span>{{ displayVenue(event.venue) }}</span>
+                  <span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span>
+                </div>
+              </div>
+              <div class="desktop-row-tags">
+                <span v-if="event.city" class="tag region-tag">{{ event.city }}</span>
+                <span class="tag type-tag">{{ isJoined(event) ? "已参加" : "现场" }}</span>
+              </div>
+              <div class="desktop-row-status">
+                <span :class="isJoined(event) ? 'status-dot joined' : 'status-dot'"></span>
+                <strong>{{ isJoined(event) ? "已参加" : eventListStatusLabel(event) }}</strong>
+              </div>
+              <button class="row-menu-button" type="button" aria-label="更多" @click.stop>⋮</button>
+            </article>
+            <p v-if="filteredDayEvents.length === 0" class="muted">{{ loading ? "加载中..." : "这一天没有匹配活动。" }}</p>
+          </div>
+          <p class="muted result-note">日历按月分页，点击日期查看当天所有活动；全量活动仍在后端。</p>
+        </div>
+
+        <aside class="desktop-detail-panel" aria-label="活动详情">
+          <div v-if="selectedEvent" class="desktop-detail-inner">
+            <section class="desktop-detail-hero">
+              <div class="desktop-detail-head">
+                <span class="tag status-tag">{{ typeLabel(selectedEvent.type) }}</span>
+                <button class="ghost-button" type="button" @click="openEvent(selectedEvent)">打开详情</button>
+              </div>
+              <h2>{{ selectedEvent.title }}</h2>
+              <div class="desktop-detail-meta">
+                <span>{{ formatDetailDate(selectedEvent.date) }}</span>
+                <span>{{ displayVenue(selectedEvent.venue) }}</span>
+                <span v-if="eventCardArtistSummary(selectedEvent)">{{ eventCardArtistSummary(selectedEvent) }}</span>
+              </div>
+              <div class="desktop-keyfacts">
+                <div>
+                  <span>日期</span>
+                  <strong>{{ compactMonthDay(selectedEvent.date) }}</strong>
+                </div>
+                <div>
+                  <span>地区</span>
+                  <strong>{{ selectedEvent.city || "未标注" }}</strong>
+                </div>
+                <div>
+                  <span>出演</span>
+                  <strong>{{ selectedEvent.artists.length.toLocaleString("ja-JP") }}</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="desktop-inspector-card">
+              <div class="panel-head">
+                <h2>我的状态</h2>
+                <button class="ghost-button" type="button" @click="authUser ? saveEventNote() : go('profile')">{{ authUser ? "记录" : "登录" }}</button>
+              </div>
+              <div class="desktop-status-row">
+                <span :class="authUser ? 'status-dot warning' : 'status-dot'"></span>
+                <strong>{{ authUser ? eventNoteStatusLabel : "登录后管理" }}</strong>
+              </div>
+              <div class="desktop-status-choices">
+                <button
+                  v-for="[value, label] in eventNoteStatusOptions.slice(1, 5)"
+                  :key="value"
+                  type="button"
+                  :class="{ active: eventNoteStatus === value }"
+                  @click="authUser ? (eventNoteStatus = value, saveEventNote()) : go('profile')"
+                >
+                  {{ label }}
+                </button>
+              </div>
+              <p class="muted">{{ authUser ? "可记录抽选、购票、座位和同行备注。" : "登录后保存活动状态和备注。" }}</p>
+            </section>
+
+            <section v-if="isUpcomingSelectedEvent" class="desktop-inspector-card">
+              <div class="panel-head">
+                <h2>票务参考</h2>
+                <button class="ghost-button" type="button" :disabled="ticketReferenceLoading" @click="loadEventTicketReference(true)">检查</button>
+              </div>
+              <div class="ticket-reference-mini">
+                <span>{{ ticketReference.platform || "TicketJam" }} · {{ ticketReferenceStatusLabel }}</span>
+                <strong>{{ ticketReference.minPrice ? ticketReference.minPrice.toLocaleString("ja-JP") + " 円 / 枚" : "暂未取得价格" }}</strong>
+                <p>{{ ticketReference.message || "公开页面匹配结果只作为参考，购买前请确认券面条件。" }}</p>
+                <a :href="ticketReference.listUrl || ticketReference.searchUrl || selectedEvent.sourceUrl" target="_blank" rel="noreferrer">查看详情</a>
+              </div>
+            </section>
+
+            <section class="desktop-inspector-card">
+              <div class="panel-head">
+                <h2>来源信息</h2>
+                <a class="ghost-button link-button" :href="selectedEvent.sourceUrl" target="_blank" rel="noreferrer">查看来源</a>
+              </div>
+              <div class="source-health">
+                <span>{{ selectedEvent.sourceName || "Eventernote" }}</span>
+                <strong>信息新鲜度：高</strong>
+                <small>{{ eventSourceSummary }}</small>
+                <div class="source-meter" aria-label="信息新鲜度高">
+                  <i></i><i></i><i></i>
+                </div>
+              </div>
+            </section>
+
+            <section class="desktop-inspector-card desktop-notes-card">
+              <div class="panel-head">
+                <h2>笔记</h2>
+                <button class="ghost-button" type="button" @click="authUser ? openEvent(selectedEvent) : go('profile')">编辑</button>
+              </div>
+              <p>{{ eventNoteMemo || "同行、座位希望、物贩、交通等可以记录在这里。" }}</p>
+            </section>
+
+            <section class="desktop-link-list">
+              <button type="button" @click="openEvent(selectedEvent)">
+                <span>出演者</span>
+                <strong>{{ selectedEvent.artists.length.toLocaleString("ja-JP") }}</strong>
+              </button>
+              <button v-if="isConcreteWorkTitle(selectedEvent.work)" type="button" @click="openEventWork(selectedEvent)">
+                <span>相关作品</span>
+                <strong>1</strong>
+              </button>
+              <button type="button" @click="openEventVenue(selectedEvent)">
+                <span>会场信息</span>
+                <strong>›</strong>
+              </button>
+              <button type="button" @click="openEvent(selectedEvent)">
+                <span>修正记录</span>
+                <strong>{{ eventCorrections.length.toLocaleString("ja-JP") }}</strong>
+              </button>
+            </section>
+
+            <div class="desktop-detail-actions">
+              <button class="ghost-button" type="button" @click="openEvent(selectedEvent)">分享</button>
+              <a class="secondary-button link-button" :href="mapUrlForVenue(selectedEvent.venue)" target="_blank" rel="noreferrer">地图</a>
+              <a v-if="eventExtra.ticketUrl" class="primary-button link-button" :href="eventExtra.ticketUrl" target="_blank" rel="noreferrer">票务</a>
+              <button v-else class="primary-button" type="button" @click="loadEventTicketReference(true)">票务检查</button>
             </div>
           </div>
-        </article>
-        <p v-if="dayEvents.length === 0" class="muted">{{ loading ? "加载中..." : "这一天没有匹配活动。" }}</p>
+          <div v-else class="desktop-detail-empty">
+            <h2>选择一场活动</h2>
+            <p class="muted">左侧列表用于浏览，右侧用于判断是否参加、查票务和记录来源。</p>
+          </div>
+        </aside>
       </div>
-      <p class="muted result-note">日历按月分页，点击日期查看当天所有活动；全量活动仍在后端。</p>
     </section>
 
     <section v-if="page === 'event'" class="page-view event-detail-page">
@@ -271,6 +515,21 @@ const template = `
       </div>
 
       <section v-if="selectedEvent" class="event-detail-card">
+        <section class="decision-strip" aria-label="活动决策摘要">
+          <div>
+            <span>日期</span>
+            <strong>{{ formatDate(selectedEvent.date).month }} {{ formatDate(selectedEvent.date).day }} · {{ formatDate(selectedEvent.date).weekday }}</strong>
+          </div>
+          <div>
+            <span>会场</span>
+            <strong>{{ displayVenue(selectedEvent.venue) }}</strong>
+          </div>
+          <div>
+            <span>我的判断</span>
+            <strong>{{ authUser ? eventNoteStatusLabel : "登录后管理" }}</strong>
+          </div>
+        </section>
+
         <div class="event-detail-main">
           <p class="eyebrow">{{ selectedEvent.status }}</p>
           <h2>{{ selectedEvent.title }}</h2>
@@ -298,6 +557,11 @@ const template = `
             <span>行动信息</span>
             <strong>{{ eventExtra.ticketUrl || eventExtra.officialUrl ? "已有链接" : "待补充" }}</strong>
             <small>{{ actionInfoSummary }}</small>
+          </div>
+          <div>
+            <span>数据来源</span>
+            <strong>{{ selectedEvent.sourceName || "Eventernote" }}</strong>
+            <small>{{ eventSourceSummary }}</small>
           </div>
         </section>
 
@@ -337,6 +601,52 @@ const template = `
             <h2>活动补充</h2>
           </div>
           <p class="event-extra-note">{{ eventExtra.ticketInfo }}</p>
+        </section>
+
+        <section v-if="isUpcomingSelectedEvent" class="panel ticket-reference-panel">
+          <div class="panel-head">
+            <h2>二手票参考</h2>
+            <span class="muted">{{ ticketReferenceLoading ? "检查中..." : ticketReferenceCheckedLabel }}</span>
+          </div>
+          <div class="ticket-reference-card" :class="ticketReference.status">
+            <div>
+              <span>{{ ticketReference.platform || "TicketJam" }} · {{ ticketReferenceStatusLabel }}</span>
+              <strong>{{ ticketReference.minPrice ? ticketReference.minPrice.toLocaleString("ja-JP") + " 円 / 枚" : "暂未取得价格" }}</strong>
+              <p>{{ ticketReference.message || "基于公开搜索页的缓存参考，购买前请自行确认票券条件。" }}</p>
+              <p v-if="ticketReference.query" class="muted">搜索词：{{ ticketReference.query }}</p>
+            </div>
+            <div class="ticket-reference-actions">
+              <span class="tag">{{ ticketReference.listingCount ? ticketReference.listingCount + " 件匹配" : "未匹配" }}</span>
+              <span class="tag">{{ ticketReferenceCacheLabel }}</span>
+              <a class="secondary-button link-button" :href="ticketReference.listUrl || ticketReference.searchUrl" target="_blank" rel="noreferrer">打开票酱列表</a>
+              <button class="ghost-button" type="button" :disabled="ticketReferenceLoading" @click="loadEventTicketReference(true)">刷新</button>
+            </div>
+          </div>
+          <p class="ticket-trust-note">{{ ticketReferenceTrustNote }}</p>
+          <div v-if="ticketReferenceListings.length" class="ticket-listing-list">
+            <article v-for="listing in pagedTicketReferenceListings" :key="listing.url || listing.price + listing.title" class="ticket-listing-row">
+              <div class="ticket-listing-price">
+                <strong>{{ listing.price.toLocaleString("ja-JP") }} 円/枚</strong>
+                <span v-if="listing.quantity">{{ listing.quantity }} 枚</span>
+              </div>
+              <div class="ticket-listing-body">
+                <h3>{{ listing.seat || listing.title || "座席未定" }}</h3>
+                <p v-if="listing.dateLine" class="muted">{{ listing.dateLine }}</p>
+                <p v-if="listing.description">{{ listing.description }}</p>
+                <div v-if="listing.tags?.length" class="tag-row">
+                  <span v-for="tag in listing.tags" :key="tag" class="tag">{{ tag }}</span>
+                </div>
+              </div>
+              <a v-if="listing.url" class="ghost-button link-button" :href="listing.url" target="_blank" rel="noreferrer">详情</a>
+            </article>
+            <div v-if="ticketReferencePageCount > 1" class="ticket-pagination">
+              <span class="muted">第 {{ ticketReferencePage }} / {{ ticketReferencePageCount }} 页 · {{ ticketReferenceListings.length }} 条已读取</span>
+              <div>
+                <button class="ghost-button" type="button" :disabled="ticketReferencePage <= 1" @click="ticketReferencePage -= 1">上一页</button>
+                <button class="ghost-button" type="button" :disabled="ticketReferencePage >= ticketReferencePageCount" @click="ticketReferencePage += 1">下一页</button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section v-if="!authUser" class="panel event-note-panel sign-in-nudge">
@@ -418,10 +728,20 @@ const template = `
 
         <section class="panel event-correction-panel">
           <div class="panel-head">
-            <h2>信息纠错 / 确认</h2>
-            <span class="muted">{{ canReviewCorrections ? "管理员模式" : "用户补完" }}</span>
+            <div>
+              <h2>来源与修正</h2>
+              <p class="muted">原站信息、用户补完和管理员确认会集中在这里。</p>
+            </div>
+            <button class="ghost-button" type="button" @click="showCorrectionPanel = !showCorrectionPanel">
+              {{ showCorrectionPanel ? "收起" : "提交 / 查看" }}
+            </button>
           </div>
-          <form class="correction-form" @submit.prevent="submitCorrection">
+          <div class="source-trust-row">
+            <span>{{ selectedEvent.sourceName || "Eventernote" }}</span>
+            <strong>{{ selectedEvent.verifiedAt ? "确认于 " + selectedEvent.verifiedAt : "确认日期未标注" }}</strong>
+            <a :href="selectedEvent.sourceUrl" target="_blank" rel="noreferrer">打开原始页面</a>
+          </div>
+          <form v-if="showCorrectionPanel" class="correction-form" @submit.prevent="submitCorrection">
             <label class="search-field">
               <span>字段</span>
               <select v-model="correctionField">
@@ -442,7 +762,7 @@ const template = `
             </label>
             <button class="secondary-button" type="submit">{{ authUser ? "提交纠错" : "登录提交" }}</button>
           </form>
-          <div class="correction-list">
+          <div v-if="showCorrectionPanel || eventCorrections.length" class="correction-list">
             <article v-for="correction in eventCorrections" :key="correction.id" class="correction-card" :class="correction.status">
               <div>
                 <span>{{ correction.fieldLabel }}</span>
@@ -460,7 +780,7 @@ const template = `
                 <button v-if="correction.canHide" class="ghost-button danger" type="button" @click="hideCorrection(correction)">隐藏</button>
               </div>
             </article>
-            <p v-if="eventCorrections.length === 0" class="muted">还没有纠错记录。用户提交后可由其他人确认，管理员可最终确认或驳回。</p>
+            <p v-if="showCorrectionPanel && eventCorrections.length === 0" class="muted">还没有纠错记录。用户提交后可由其他人确认，管理员可最终确认或驳回。</p>
           </div>
         </section>
 
@@ -482,8 +802,19 @@ const template = `
         <div class="detail-actions">
           <a class="primary-button link-button" :href="selectedEvent.sourceUrl" target="_blank" rel="noreferrer">打开 Eventernote</a>
           <button v-if="isConcreteWorkTitle(selectedEvent.work)" class="ghost-button" type="button" @click="openEventWork(selectedEvent)">同作品活动</button>
+          <button class="ghost-button" type="button" @click="showCorrectionPanel = true">修正信息</button>
         </div>
+
       </section>
+
+      <div v-if="selectedEvent" class="mobile-decision-bar" aria-label="移动端活动操作">
+        <button class="primary-button" :class="{ joined: isJoined(selectedEvent) }" type="button" @click="toggleJoin(selectedEvent)">
+          {{ authUser ? (isJoined(selectedEvent) ? "已加入" : "想去") : "登录" }}
+        </button>
+        <a class="secondary-button link-button" :href="mapUrlForVenue(selectedEvent.venue)" target="_blank" rel="noreferrer">地图</a>
+        <a v-if="eventExtra.ticketUrl" class="ghost-button link-button" :href="eventExtra.ticketUrl" target="_blank" rel="noreferrer">票务</a>
+        <a v-else class="ghost-button link-button" :href="selectedEvent.sourceUrl" target="_blank" rel="noreferrer">原站</a>
+      </div>
 
       <section v-else class="panel">
         <h2>还没有选择活动</h2>
@@ -641,7 +972,7 @@ const template = `
                 </div>
                 <div>
                   <h3 class="event-title">{{ event.title }}</h3>
-                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span></div>
                   <div v-if="eventCardTags(event).length" class="tag-row">
                     <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
                   </div>
@@ -717,7 +1048,7 @@ const template = `
                 </div>
                 <div>
                   <h3 class="event-title">{{ event.title }}</h3>
-                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span></div>
                   <div v-if="eventCardTags(event).length" class="tag-row">
                     <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
                   </div>
@@ -800,7 +1131,7 @@ const template = `
                 </div>
                 <div>
                   <h3 class="event-title">{{ event.title }}</h3>
-                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span></div>
+                  <div class="event-meta"><span>{{ displayVenue(event.venue) }}</span><span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span></div>
                   <div v-if="eventCardTags(event).length" class="tag-row">
                     <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
                   </div>
@@ -849,6 +1180,32 @@ const template = `
         <button type="button" :class="{ active: mySection === 'follows' }" @click="mySection = 'follows'">关注</button>
       </div>
 
+      <section v-if="authUser && mySection !== 'follows' && favoriteItems.length > 0" class="favorite-filter-bar">
+        <label class="search-field">
+          <span>状态</span>
+          <select v-model="favoriteStatusFilter">
+            <option value="all">全部状态</option>
+            <option v-for="[value, label] in eventNoteStatusOptions" :key="value" :value="value">{{ label }}</option>
+          </select>
+        </label>
+        <label class="search-field">
+          <span>时间</span>
+          <select v-model="favoritePeriodFilter">
+            <option value="all">全部时间</option>
+            <option value="upcoming">未开活动</option>
+            <option value="ended">已结束</option>
+          </select>
+        </label>
+        <label class="search-field">
+          <span>地区</span>
+          <select v-model="favoriteAreaFilter">
+            <option value="all">全部地区</option>
+            <option v-for="area in favoriteAreaOptions" :key="area" :value="area">{{ area }}</option>
+          </select>
+        </label>
+        <button class="ghost-button" type="button" @click="resetFavoriteFilters">重置</button>
+      </section>
+
       <section v-if="authUser && mySection === 'follows'" class="panel follow-panel">
         <div class="panel-head">
           <h2>关注</h2>
@@ -875,9 +1232,9 @@ const template = `
 
       <section v-if="authUser && mySection === 'overview'" class="favorite-overview">
         <section class="dashboard compact-stats">
-          <div class="metric"><span>全部收藏</span><strong>{{ favoriteItems.length.toLocaleString("ja-JP") }}</strong></div>
+          <div class="metric"><span>筛选结果</span><strong>{{ favoriteFilteredItems.length.toLocaleString("ja-JP") }}</strong></div>
           <div class="metric"><span>计划中</span><strong>{{ favoritePlanningCount.toLocaleString("ja-JP") }}</strong></div>
-          <div class="metric"><span>已参加</span><strong>{{ favoriteDoneCount.toLocaleString("ja-JP") }}</strong></div>
+          <div class="metric"><span>已完成/放弃</span><strong>{{ favoriteDoneCount.toLocaleString("ja-JP") }}</strong></div>
         </section>
 
         <section v-if="favoriteItems.length === 0" class="panel empty-state">
@@ -900,7 +1257,7 @@ const template = `
                 <h3 class="event-title">{{ event.title }}</h3>
                 <div class="event-meta">
                   <span>{{ displayVenue(event.venue) }}</span>
-                  <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
+                  <span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span>
                 </div>
                 <div v-if="eventCardTags(event).length" class="tag-row">
                   <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
@@ -993,7 +1350,7 @@ const template = `
                 <h3 class="event-title">{{ event.title }}</h3>
                 <div class="event-meta">
                   <span>{{ displayVenue(event.venue) }}</span>
-                  <span v-if="displayArtists(event).length">{{ displayArtists(event).join(" / ") }}</span>
+                  <span v-if="eventCardArtistSummary(event)">{{ eventCardArtistSummary(event) }}</span>
                 </div>
                 <div v-if="eventCardTags(event).length" class="tag-row">
                   <span v-for="tag in eventCardTags(event)" :key="tag.label" class="tag" :class="tag.className">{{ tag.label }}</span>
@@ -1535,6 +1892,11 @@ createApp({
 
     const page = ref(routePageFromHash());
     const routeParam = ref(routeParamFromHash());
+    const globalQuery = ref("");
+    const globalSuggestions = ref([]);
+    const globalSuggestionGroups = ref([]);
+    const showGlobalSuggestions = ref(false);
+    const showMobileFilters = ref(false);
     const query = ref("");
     const city = ref("all");
     const cityOptions = ref(defaultCityOptions);
@@ -1582,9 +1944,13 @@ createApp({
     const eventNoteMemo = ref("");
     const eventNoteSaveState = ref("");
     const showAllEventArtists = ref(false);
+    const showCorrectionPanel = ref(false);
     const calendarFeedUrl = ref("");
     const calendarWebcalUrl = ref("");
     const eventExtra = ref({});
+    const ticketReference = ref({});
+    const ticketReferenceLoading = ref(false);
+    const ticketReferencePage = ref(1);
     const eventInteractions = ref({ statusStats: { items: [], total: 0 }, questions: [], corrections: [], currentUser: null });
     const questionDraft = ref("");
     const correctionField = ref("venue");
@@ -1598,6 +1964,7 @@ createApp({
     const collapsedArtistLimit = 12;
     const events = ref([]);
     const dayEvents = ref([]);
+    const eventListFilter = ref("all");
     const relatedUpcomingEvents = ref([]);
     const relatedEndedEvents = ref([]);
     const relatedUpcomingTotal = ref(0);
@@ -1609,6 +1976,7 @@ createApp({
     const relatedEventLimit = 100;
     const collapsedRelatedSections = ref(new Set(["ended"]));
     const querySuggestions = ref([]);
+    const querySuggestionGroups = ref([]);
     const directorySuggestions = ref([]);
     const showQuerySuggestions = ref(false);
     const showDirectorySuggestions = ref(false);
@@ -1639,6 +2007,9 @@ createApp({
       works: new Set(),
       venues: new Set()
     });
+    const favoriteStatusFilter = ref("all");
+    const favoritePeriodFilter = ref("all");
+    const favoriteAreaFilter = ref("all");
     const favoriteArtists = ref([]);
     const favoriteWorks = ref([]);
     const favoriteVenues = ref([]);
@@ -1665,6 +2036,21 @@ createApp({
         description: "Eventernote 原始数据只有 place_id；已缓存访问过的会场名，其余可继续批量补齐。"
       }
     ]);
+    const latestSyncDate = computed(() => {
+      const value = meta.value.latestSync?.syncedAt || meta.value.generatedAt || "";
+      const date = value ? new Date(value) : null;
+      return date && !Number.isNaN(date.getTime()) ? date : null;
+    });
+    const dataFreshnessLabel = computed(() => {
+      if (!latestSyncDate.value) return "未读取同步时间";
+      return latestSyncDate.value.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" });
+    });
+    const dataFreshnessSummary = computed(() => {
+      const sync = meta.value.latestSync;
+      if (!sync) return "当前只读取到本地生成数据，未检测到 latest crawl 元信息。";
+      const range = [sync.startDate, sync.endDate].filter(Boolean).join(" 至 ");
+      return `${range || "覆盖日期未标注"}，最新抓取 ${Number(sync.events || 0).toLocaleString("ja-JP")} 条。`;
+    });
 
     const normalizedDirectoryQuery = computed(() => directoryQuery.value.trim().toLowerCase());
     const visibleArtists = computed(() => {
@@ -1709,10 +2095,54 @@ createApp({
     const eventStatusStats = computed(() => eventInteractions.value.statusStats?.items || []);
     const eventQuestions = computed(() => eventInteractions.value.questions || []);
     const eventCorrections = computed(() => eventInteractions.value.corrections || []);
+    const hasGlobalSuggestions = computed(() => globalSuggestionGroups.value.some((group) => group.items?.length) || globalSuggestions.value.length > 0);
+    const hasQuerySuggestions = computed(() => querySuggestionGroups.value.some((group) => group.items?.length) || querySuggestions.value.length > 0);
     const canReviewCorrections = computed(() => Boolean(eventInteractions.value.currentUser?.isAdmin));
     const visibleNavItems = computed(() => navItems.filter((item) => !item.adminOnly || authUser.value?.isAdmin));
+    const mobileNavItems = computed(() => [
+      { id: "events", short: "日历" },
+      { id: "favorites", short: "我的活动" },
+      { id: "profile", short: "添加活动", add: true },
+      { id: "home", short: "发现" },
+      { id: "sources", short: "更多" }
+    ].filter((item) => item.id !== "sources" || visibleNavItems.value.some((nav) => nav.id === "sources")));
     const adminPendingCorrections = computed(() => adminModeration.value.pendingCorrections || []);
     const adminRecentQuestions = computed(() => adminModeration.value.recentQuestions || []);
+    const isUpcomingSelectedEvent = computed(() => Boolean(selectedEvent.value?.date && selectedEvent.value.date >= initialDate));
+    const ticketReferenceCheckedLabel = computed(() => {
+      if (!ticketReference.value?.checkedAt) return "未检查";
+      const date = new Date(ticketReference.value.checkedAt);
+      if (Number.isNaN(date.getTime())) return "已检查";
+      return `${date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })} ${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+    });
+    const ticketReferenceStatusLabel = computed(() => ({
+      found: "已匹配公开出品",
+      not_found: "未匹配同日出品",
+      past_event: "已结束不检查",
+      timeout: "读取超时",
+      error: "读取失败",
+      disabled: "服务端已关闭"
+    }[ticketReference.value?.status] || "未检查"));
+    const ticketReferenceCacheLabel = computed(() => {
+      if (ticketReferenceLoading.value) return "读取中";
+      if (ticketReference.value?.cached) return "缓存结果";
+      if (ticketReference.value?.checkedAt) return "刚刚检查";
+      return "未检查";
+    });
+    const ticketReferenceTrustNote = computed(() => {
+      if (ticketReference.value?.status === "disabled") return "当前服务器关闭了外部票务查询，只保留跳转原站搜索入口。";
+      if (ticketReference.value?.status === "timeout") return "外部页面响应较慢，系统会短时间缓存失败状态，避免反复阻塞详情页。";
+      if (ticketReference.value?.status === "error") return "外部页面读取失败时只作为不可用状态展示，不影响活动本身信息。";
+      return "票价来自 TicketJam 公开页面的同日期文本匹配，可能存在标题相似或票券条件差异，请以原站详情和官方信息为准。";
+    });
+    const ticketReferenceListings = computed(() => Array.isArray(ticketReference.value?.listings) ? ticketReference.value.listings : []);
+    const ticketReferencePageSize = 5;
+    const ticketReferencePageCount = computed(() => Math.max(1, Math.ceil(ticketReferenceListings.value.length / ticketReferencePageSize)));
+    const pagedTicketReferenceListings = computed(() => {
+      const pageNumber = Math.min(ticketReferencePage.value, ticketReferencePageCount.value);
+      const start = (pageNumber - 1) * ticketReferencePageSize;
+      return ticketReferenceListings.value.slice(start, start + ticketReferencePageSize);
+    });
     const correctionFieldOptions = [
       ["title", "标题"],
       ["date", "日期"],
@@ -1736,6 +2166,57 @@ createApp({
         region ? { label: region, className: "region-tag" } : null,
         { label: typeLabel(event?.type || "event"), className: "type-tag" }
       ].filter(Boolean);
+    };
+    const eventCardArtistSummary = (event) => {
+      const artists = displayArtists(event);
+      if (!artists.length) return "";
+      const head = artists.slice(0, 2).join(" / ");
+      return artists.length > 2 ? `${head} +${artists.length - 2}` : head;
+    };
+    const desktopDateStrip = computed(() => {
+      const monthDays = calendarCells.value.filter((day) => day.inMonth);
+      const activeIndex = Math.max(0, monthDays.findIndex((day) => day.date === selectedDate.value));
+      const start = Math.max(0, Math.min(activeIndex - 6, Math.max(0, monthDays.length - 14)));
+      return monthDays.slice(start, start + 14).map((day) => ({
+        ...day,
+        weekday: weekdays[new Date(`${day.date}T00:00:00`).getDay()]
+      }));
+    });
+    const filteredDayEvents = computed(() => {
+      if (eventListFilter.value === "joined") {
+        return dayEvents.value.filter((event) => isJoined(event));
+      }
+      if (eventListFilter.value === "planning") {
+        return dayEvents.value.filter((event) => ["want", "ticketing", "won", "paid"].includes(normalizeEventNoteStatus(event?.note?.status || event?.myStatus || "")));
+      }
+      if (eventListFilter.value === "ticketing") {
+        return dayEvents.value.filter((event) => normalizeEventNoteStatus(event?.note?.status || event?.myStatus || "") === "ticketing");
+      }
+      if (eventListFilter.value === "waiting") {
+        return dayEvents.value.filter((event) => !isJoined(event));
+      }
+      return dayEvents.value;
+    });
+    const eventListFilterOptions = computed(() => {
+      const planning = dayEvents.value.filter((event) => ["want", "ticketing", "won", "paid"].includes(normalizeEventNoteStatus(event?.note?.status || event?.myStatus || ""))).length;
+      const ticketing = dayEvents.value.filter((event) => normalizeEventNoteStatus(event?.note?.status || event?.myStatus || "") === "ticketing").length;
+      const joined = dayEvents.value.filter((event) => isJoined(event)).length;
+      return [
+        { id: "all", label: "全部", count: dayEventTotal.value },
+        { id: "joined", label: "已参加", count: joined },
+        { id: "planning", label: "计划中", count: planning },
+        { id: "ticketing", label: "抽选中", count: ticketing },
+        { id: "waiting", label: "待定", count: Math.max(0, dayEvents.value.length - joined) }
+      ];
+    });
+    const eventListStatusLabel = (event) => {
+      if (isJoined(event)) return "已参加";
+      const status = normalizeEventNoteStatus(event?.note?.status || event?.myStatus || "");
+      return eventNoteStatusOptions.find(([value]) => value === status)?.[1] || "计划中";
+    };
+    const compactMonthDay = (date) => {
+      const [, , month = "", day = ""] = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/) || [];
+      return month && day ? `${month}.${day}` : date;
     };
     const profileTagRows = computed(() => {
       return profileTags.value
@@ -1823,6 +2304,12 @@ createApp({
       if (eventExtra.value.ticketInfo) return "已有票务说明，详情见活动补充。";
       return "官网、票务、票价会优先展示在这里。";
     });
+    const eventSourceSummary = computed(() => {
+      const event = selectedEvent.value;
+      if (!event) return "当前没有活动来源。";
+      const verified = event.verifiedAt ? `确认于 ${event.verifiedAt}` : "未标注确认日期";
+      return `${verified}，原始页面可从底部打开核对。`;
+    });
     const favoriteEventsByDate = computed(() => {
       const groups = new Map();
       for (const event of favoriteItems.value) {
@@ -1852,6 +2339,27 @@ createApp({
     const eventStatusForFavorite = (event) => {
       return normalizeEventNoteStatus(event?.note?.status || event?.myStatus || "none");
     };
+    const favoriteAreaOptions = computed(() => {
+      return [...new Set(favoriteItems.value.map((event) => event.city || "未标注"))].sort((a, b) => a.localeCompare(b, "ja"));
+    });
+    const favoriteFilteredItems = computed(() => {
+      return favoriteItems.value.filter((event) => {
+        if (favoriteStatusFilter.value !== "all" && eventStatusForFavorite(event) !== favoriteStatusFilter.value) return false;
+        if (favoritePeriodFilter.value === "upcoming" && (!event.date || event.date < initialDate)) return false;
+        if (favoritePeriodFilter.value === "ended" && event.date && event.date >= initialDate) return false;
+        if (favoriteAreaFilter.value !== "all" && (event.city || "未标注") !== favoriteAreaFilter.value) return false;
+        return true;
+      });
+    });
+    const favoriteFilteredEventsByDate = computed(() => {
+      const groups = new Map();
+      for (const event of favoriteFilteredItems.value) {
+        const date = event.date || "未定";
+        if (!groups.has(date)) groups.set(date, []);
+        groups.get(date).push(event);
+      }
+      return groups;
+    });
     const sortFavoriteStatusItems = (items) => items.slice().sort((a, b) => {
       const aUpcoming = a.date && a.date >= initialDate;
       const bUpcoming = b.date && b.date >= initialDate;
@@ -1864,12 +2372,12 @@ createApp({
         .map(([status, label]) => ({
           status,
           label,
-          items: sortFavoriteStatusItems(favoriteItems.value.filter((event) => eventStatusForFavorite(event) === status))
+          items: sortFavoriteStatusItems(favoriteFilteredItems.value.filter((event) => eventStatusForFavorite(event) === status))
         }))
         .filter((group) => group.items.length);
     });
-    const favoritePlanningCount = computed(() => favoriteItems.value.filter((event) => ["want", "ticketing"].includes(eventStatusForFavorite(event))).length);
-    const favoriteDoneCount = computed(() => favoriteItems.value.filter((event) => eventStatusForFavorite(event) === "done").length);
+    const favoritePlanningCount = computed(() => favoriteFilteredItems.value.filter((event) => ["want", "ticketing", "won", "paid"].includes(eventStatusForFavorite(event))).length);
+    const favoriteDoneCount = computed(() => favoriteFilteredItems.value.filter((event) => ["done", "gaveup"].includes(eventStatusForFavorite(event))).length);
     const favoriteCalendarTitle = computed(() => {
       const [year, month] = favoriteMonth.value.split("-");
       return `${year}年${Number(month)}月`;
@@ -1887,7 +2395,7 @@ createApp({
         const date = new Date(start);
         date.setDate(start.getDate() + index);
         const iso = toDateKey(date);
-        const items = favoriteEventsByDate.value.get(iso) || [];
+        const items = favoriteFilteredEventsByDate.value.get(iso) || [];
         return {
           key: iso,
           date: iso,
@@ -1898,8 +2406,8 @@ createApp({
         };
       });
     });
-    const favoriteMonthTotal = computed(() => favoriteItems.value.filter((event) => event.date?.startsWith(favoriteMonth.value)).length);
-    const selectedFavoriteItems = computed(() => favoriteEventsByDate.value.get(favoriteSelectedDate.value) || []);
+    const favoriteMonthTotal = computed(() => favoriteFilteredItems.value.filter((event) => event.date?.startsWith(favoriteMonth.value)).length);
+    const selectedFavoriteItems = computed(() => favoriteFilteredEventsByDate.value.get(favoriteSelectedDate.value) || []);
     const favoriteSelectedDateLabel = computed(() => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(favoriteSelectedDate.value)) return "选择日期";
       return formatDetailDate(favoriteSelectedDate.value);
@@ -1932,7 +2440,10 @@ createApp({
       ["none", "未记录"],
       ["want", "想去"],
       ["ticketing", "抽选/购票中"],
-      ["done", "已参加"]
+      ["won", "已中票"],
+      ["paid", "已购票"],
+      ["done", "已参加"],
+      ["gaveup", "放弃"]
     ];
     const artistHistoricalTotal = computed(() => Math.max(selectedArtist.value?.follows || 0, relatedEventTotal.value || 0));
     const venueHistoricalTotal = computed(() => Math.max(selectedVenue.value?.events || 0, relatedEventTotal.value || 0));
@@ -2031,6 +2542,7 @@ createApp({
         if (payload.selectedDate === selectedDate.value) {
           dayEvents.value = payload.selectedItems || [];
           dayEventTotal.value = payload.selectedTotal || 0;
+          syncWorkbenchSelection();
         } else {
           await loadDayEvents();
         }
@@ -2063,6 +2575,21 @@ createApp({
       const payload = await getJson(`/api/day-events?${params}`);
       dayEvents.value = payload.items;
       dayEventTotal.value = payload.total;
+      syncWorkbenchSelection();
+    }
+
+    function syncWorkbenchSelection() {
+      if (page.value !== "events") return;
+      const stillVisible = selectedEvent.value?.sourceEventId && dayEvents.value.some((event) => event.sourceEventId === selectedEvent.value.sourceEventId);
+      if (!stillVisible) {
+        selectedEvent.value = dayEvents.value[0] || null;
+      }
+      if (selectedEvent.value?.sourceEventId) {
+        loadEventNote().catch(console.error);
+        loadEventExtra().catch(console.error);
+        loadEventTicketReference().catch(console.error);
+        loadEventInteractions().catch(console.error);
+      }
     }
 
     async function loadEventBySourceId(sourceEventId) {
@@ -2072,6 +2599,7 @@ createApp({
       showAllEventArtists.value = false;
       loadEventNote().catch(console.error);
       loadEventExtra().catch(console.error);
+      loadEventTicketReference().catch(console.error);
       loadEventInteractions().catch(console.error);
     }
 
@@ -2086,6 +2614,37 @@ createApp({
 
     function applyEventExtra(extra) {
       eventExtra.value = extra || {};
+    }
+
+    async function loadEventTicketReference(force = false) {
+      if (!selectedEvent.value?.sourceEventId || !isUpcomingSelectedEvent.value) {
+        ticketReference.value = {};
+        ticketReferencePage.value = 1;
+        return;
+      }
+      ticketReferenceLoading.value = true;
+      try {
+        const params = new URLSearchParams({
+          sourceEventId: selectedEvent.value.sourceEventId,
+          ...(force ? { force: "1" } : {})
+        });
+        const payload = await getJson(`/api/event-ticket-reference?${params}`);
+        ticketReference.value = payload.reference || {};
+        ticketReferencePage.value = 1;
+      } catch (error) {
+        ticketReference.value = {
+          platform: "TicketJam",
+          status: "error",
+          searchUrl: `https://ticketjam.jp/tickets_search?query=${encodeURIComponent(selectedEvent.value.title || "")}`,
+          minPrice: null,
+          listingCount: 0,
+          checkedAt: new Date().toISOString(),
+          message: error?.message || "票价参考暂时读取失败。"
+        };
+        ticketReferencePage.value = 1;
+      } finally {
+        ticketReferenceLoading.value = false;
+      }
     }
 
     async function loadEventNote() {
@@ -2346,9 +2905,88 @@ createApp({
       target.value = payload.items;
     }
 
-    function applyQuerySuggestion(value) {
+    async function loadQuerySuggestions(value) {
+      const text = value.trim();
+      if (text.length < 1) {
+        querySuggestions.value = [];
+        querySuggestionGroups.value = [];
+        return;
+      }
+      const params = new URLSearchParams({
+        q: text,
+        scope: "events",
+        limit: "8"
+      });
+      const payload = await getJson(`/api/suggest?${params}`);
+      querySuggestions.value = payload.groups?.length ? [] : (payload.items || []);
+      querySuggestionGroups.value = payload.groups || [];
+    }
+
+    async function loadGlobalSuggestions(value) {
+      const text = value.trim();
+      if (text.length < 1) {
+        globalSuggestions.value = [];
+        globalSuggestionGroups.value = [];
+        return;
+      }
+      const params = new URLSearchParams({
+        q: text,
+        scope: "events",
+        limit: "10"
+      });
+      const payload = await getJson(`/api/suggest?${params}`);
+      globalSuggestions.value = payload.groups?.length ? [] : (payload.items || []);
+      globalSuggestionGroups.value = payload.groups || [];
+    }
+
+    function applyQuerySuggestion(suggestion) {
+      const value = typeof suggestion === "string" ? suggestion : suggestion.value;
       query.value = value;
       hideSuggestions();
+      if (suggestion?.type === "artist") {
+        openArtistByName(value);
+      } else if (suggestion?.type === "work") {
+        openWork({ title: value });
+      } else if (suggestion?.type === "venue") {
+        openVenueByName(value);
+      } else {
+        go("events");
+      }
+    }
+
+    function applyGlobalSuggestion(suggestion) {
+      const value = typeof suggestion === "string" ? suggestion : suggestion.value;
+      globalQuery.value = value;
+      showGlobalSuggestions.value = false;
+      globalSuggestions.value = [];
+      globalSuggestionGroups.value = [];
+      if (suggestion?.type === "artist") {
+        openArtistByName(value);
+      } else if (suggestion?.type === "work") {
+        openWork({ title: value });
+      } else if (suggestion?.type === "venue") {
+        openVenueByName(value);
+      } else {
+        query.value = value;
+        go("events");
+      }
+    }
+
+    function submitGlobalSearch() {
+      const value = globalQuery.value.trim();
+      if (!value) return;
+      query.value = value;
+      showGlobalSuggestions.value = false;
+      go("events");
+    }
+
+    function handleGlobalInput(event) {
+      globalQuery.value = event?.target?.value || "";
+      showGlobalSuggestions.value = true;
+      window.clearTimeout(globalSuggestionTimer);
+      globalSuggestionTimer = window.setTimeout(() => {
+        loadGlobalSuggestions(globalQuery.value).catch(console.error);
+      }, 120);
     }
 
     function applyDirectorySuggestion(value) {
@@ -2356,15 +2994,35 @@ createApp({
       hideSuggestions();
     }
 
+    function suggestionParts(value, needle) {
+      const text = String(value || "");
+      const queryText = String(needle || "").trim();
+      if (!text || !queryText) return [{ text, match: false }];
+      const index = text.toLowerCase().indexOf(queryText.toLowerCase());
+      if (index < 0) return [{ text, match: false }];
+      return [
+        { text: text.slice(0, index), match: false },
+        { text: text.slice(index, index + queryText.length), match: true },
+        { text: text.slice(index + queryText.length), match: false }
+      ].filter((part) => part.text);
+    }
+
     function hideSuggestions() {
       showQuerySuggestions.value = false;
       showDirectorySuggestions.value = false;
       querySuggestions.value = [];
+      querySuggestionGroups.value = [];
       directorySuggestions.value = [];
     }
 
     function hideSuggestionsSoon() {
       window.setTimeout(hideSuggestions, 120);
+    }
+
+    function hideGlobalSuggestionsSoon() {
+      window.setTimeout(() => {
+        showGlobalSuggestions.value = false;
+      }, 140);
     }
 
     async function loadLists() {
@@ -2714,16 +3372,22 @@ createApp({
     async function openEvent(event) {
       selectedEvent.value = event;
       showAllEventArtists.value = false;
+      showCorrectionPanel.value = false;
       loadEventNote().catch(console.error);
       loadEventExtra().catch(console.error);
+      loadEventTicketReference().catch(console.error);
+      loadEventInteractions().catch(console.error);
       eventReturnPage.value = ["artist", "work", "venue"].includes(page.value) ? page.value : "events";
       if (event.sourceEventId) {
         try {
           const payload = await getJson(`/api/event?sourceEventId=${encodeURIComponent(event.sourceEventId)}`);
           selectedEvent.value = payload.item;
           showAllEventArtists.value = false;
+          showCorrectionPanel.value = false;
           loadEventNote().catch(console.error);
           loadEventExtra().catch(console.error);
+          loadEventTicketReference().catch(console.error);
+          loadEventInteractions().catch(console.error);
         } catch (error) {
           console.error(error);
         }
@@ -2733,6 +3397,31 @@ createApp({
         window.location.hash = `#/event/${event.sourceEventId}`;
       }
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    async function openEventInline(event) {
+      if (window.matchMedia("(max-width: 640px)").matches) {
+        openEvent(event);
+        return;
+      }
+      selectedEvent.value = event;
+      showAllEventArtists.value = false;
+      showCorrectionPanel.value = false;
+      loadEventNote().catch(console.error);
+      loadEventExtra().catch(console.error);
+      loadEventTicketReference().catch(console.error);
+      loadEventInteractions().catch(console.error);
+      if (!event.sourceEventId) return;
+      try {
+        const payload = await getJson(`/api/event?sourceEventId=${encodeURIComponent(event.sourceEventId)}`);
+        selectedEvent.value = payload.item;
+        loadEventNote().catch(console.error);
+        loadEventExtra().catch(console.error);
+        loadEventTicketReference().catch(console.error);
+        loadEventInteractions().catch(console.error);
+      } catch (error) {
+        console.error(error);
+      }
     }
 
     function backFromEventDetail() {
@@ -2809,6 +3498,19 @@ createApp({
       page.value = "venue";
       window.location.hash = `#/venue/${encodeURIComponent(venue.id)}`;
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    async function openVenueByName(name) {
+      const params = new URLSearchParams({ q: name, limit: "8" });
+      const payload = await getJson(`/api/venues?${params}`);
+      const exact = payload.items.find((item) => item.name === name) || payload.items[0];
+      openVenue(exact || {
+        id: `search-${encodeURIComponent(name)}`,
+        name,
+        area: "搜索建议",
+        events: 0,
+        sourceUrl: ""
+      });
     }
 
     async function openEventVenue(event) {
@@ -2955,6 +3657,12 @@ createApp({
       if (!date) return;
       favoriteSelectedDate.value = date;
       favoriteMonth.value = date.slice(0, 7);
+    }
+
+    function resetFavoriteFilters() {
+      favoriteStatusFilter.value = "all";
+      favoritePeriodFilter.value = "all";
+      favoriteAreaFilter.value = "all";
     }
 
     function eventFavoriteKey(event) {
@@ -3106,6 +3814,7 @@ createApp({
 
     watch(page, () => {
       directoryQuery.value = "";
+      document.body.classList.toggle("event-route", page.value === "event");
       if (page.value === "sources") {
         loadEvents().catch((error) => {
           loading.value = false;
@@ -3114,7 +3823,7 @@ createApp({
       } else if (page.value === "admin") {
         loadAdminModeration().catch(console.error);
       }
-    });
+    }, { immediate: true });
 
     watch(isAccountPage, (active) => {
       document.body.classList.toggle("account-route", active);
@@ -3129,13 +3838,21 @@ createApp({
     });
 
     let querySuggestionTimer = 0;
+    let globalSuggestionTimer = 0;
     let directorySuggestionTimer = 0;
     let directoryRowsTimer = 0;
+
+    watch(globalQuery, (value) => {
+      window.clearTimeout(globalSuggestionTimer);
+      globalSuggestionTimer = window.setTimeout(() => {
+        loadGlobalSuggestions(value).catch(console.error);
+      }, 160);
+    });
 
     watch(query, (value) => {
       window.clearTimeout(querySuggestionTimer);
       querySuggestionTimer = window.setTimeout(() => {
-        loadSuggestions(value, "events", querySuggestions).catch(console.error);
+        loadQuerySuggestions(value).catch(console.error);
       }, 180);
     });
 
@@ -3292,6 +4009,7 @@ createApp({
       changeFavoriteMonth,
       changeMonth,
       collapsedArtistLimit,
+      compactMonthDay,
       currentMonth,
       currentYear,
       confirmCorrection,
@@ -3302,14 +4020,21 @@ createApp({
       correctionStatusLabel,
       correctionValue,
       dataSources,
+      dataFreshnessLabel,
+      dataFreshnessSummary,
       dayEventTotal,
       dayEvents,
+      desktopDateStrip,
       deleteAnswer,
       deleteQuestion,
       directorySuggestions,
       directoryQuery,
       eventBackLabel,
+      eventCardArtistSummary,
       eventCardTags,
+      eventListFilter,
+      eventListFilterOptions,
+      eventListStatusLabel,
       eventType,
       events,
       eventDisplayTags,
@@ -3322,31 +4047,45 @@ createApp({
       eventNoteStatus,
       eventNoteStatusOptions,
       eventQuestions,
+      eventSourceSummary,
       eventStatusStats,
       favoriteArtists,
       favoriteCalendarCells,
       favoriteCalendarTitle,
       favoriteDoneCount,
+      filteredDayEvents,
       favoriteEndedItems,
+      favoriteAreaFilter,
+      favoriteAreaOptions,
+      favoriteFilteredItems,
       favoriteItems,
       favoriteMonthOptions,
       favoriteMonthTotal,
       favoriteMonth,
+      favoritePeriodFilter,
       favoritePlanningCount,
       favoriteSelectedDate,
       favoriteSelectedDateLabel,
+      favoriteStatusFilter,
       favoriteStatusGroups,
       favoriteUpcomingItems,
       favoriteVenues,
       favoriteWorks,
       followedEntityCount,
       followedCount,
+      hasQuerySuggestions,
       homeEvents,
       displayVenue,
       displayArtists,
       formatDetailDate,
       formatDate,
       go,
+      globalQuery,
+      globalSuggestionGroups,
+      globalSuggestions,
+      hasGlobalSuggestions,
+      handleGlobalInput,
+      hideGlobalSuggestionsSoon,
       hideSuggestions,
       hideSuggestionsSoon,
       hideAdminCorrection,
@@ -3357,16 +4096,20 @@ createApp({
       isEntityFavorite,
       isJoined,
       isNavActive,
+      isUpcomingSelectedEvent,
+      interactionSaveState,
       isPublicProfilePage,
       isProfileEditPage,
       loading,
       loadError,
       loadAdminModeration,
       loadCalendarFeed,
+      loadEventTicketReference,
       loadMoreRelatedEvents,
       loadingRelated,
       mapUrlForVenue,
       meta,
+      mobileNavItems,
       memo,
       monthLabel,
       mySection,
@@ -3376,6 +4119,7 @@ createApp({
       openArtist,
       openArtistByName,
       openEvent,
+      openEventInline,
       openEventVenue,
       openEventWork,
       openProfileEditor,
@@ -3384,6 +4128,7 @@ createApp({
       openWork,
       page,
       plannedCount,
+      pagedTicketReferenceListings,
       profileBio,
       profileAvatarUrl,
       profileCoverUrl,
@@ -3425,6 +4170,7 @@ createApp({
       activeProfileInterest,
       activeProfileInterestItems,
       query,
+      querySuggestionGroups,
       questionDraft,
       querySuggestions,
       quickSearch,
@@ -3443,6 +4189,7 @@ createApp({
       removeProfileTag,
       reviewAdminCorrection,
       reviewCorrection,
+      resetFavoriteFilters,
       saveEventNote,
       saveMemo,
       saveProfile,
@@ -3459,13 +4206,28 @@ createApp({
       setFavoriteMonth,
       setYear,
       showAllEventArtists,
+      showCorrectionPanel,
       showDirectorySuggestions,
+      showGlobalSuggestions,
+      showMobileFilters,
       showQuerySuggestions,
       logout,
+      applyGlobalSuggestion,
       submitAuth,
       submitAnswer,
       submitCorrection,
+      submitGlobalSearch,
       submitQuestion,
+      suggestionParts,
+      ticketReference,
+      ticketReferenceCacheLabel,
+      ticketReferenceCheckedLabel,
+      ticketReferenceListings,
+      ticketReferenceLoading,
+      ticketReferencePage,
+      ticketReferencePageCount,
+      ticketReferenceStatusLabel,
+      ticketReferenceTrustNote,
       toggleEntityFavorite,
       toggleJoin,
       toggleRelatedSection,

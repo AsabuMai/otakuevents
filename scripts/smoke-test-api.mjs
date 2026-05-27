@@ -225,6 +225,13 @@ try {
   assert.equal(publicProfile.user.displayName, "Sample Public");
   assert.equal(publicProfile.profile.contacts, "Discord | sample#0001");
 
+  const paidNote = await postJson("/api/event-note", {
+    sourceEventId: "1",
+    status: "paid",
+    memo: "ticket secured"
+  }, register.cookie);
+  assert.equal(paidNote.data.note.status, "paid");
+
   const question = await postJson("/api/event-question", {
     sourceEventId: "1",
     body: "開場時間はありますか？"
@@ -312,6 +319,7 @@ try {
   const interactions = await getJsonWithCookie("/api/event-interactions?sourceEventId=1", admin.cookie);
   assert.equal(interactions.currentUser.isAdmin, true);
   assert.equal(interactions.corrections[0].status, "confirmed");
+  assert.equal(interactions.statusStats.items.find((item) => item.status === "paid").count, 1);
 
   const deletedQuestion = await postJson("/api/event-question-delete", {
     id: question.data.questions[0].id
@@ -337,8 +345,19 @@ try {
   const event = await getJson("/api/event?sourceEventId=1");
   assert.equal(event.item.venue, "東京ドーム");
 
+  const ticketReference = await getJson("/api/event-ticket-reference?sourceEventId=1");
+  assert.equal(ticketReference.reference.platform, "TicketJam");
+  assert.equal(Boolean(ticketReference.reference.searchUrl), true);
+  assert.equal(Array.isArray(ticketReference.reference.listings), true);
+  assert.equal(ticketReference.reference.cached, false);
+  const cachedTicketReference = await getJson("/api/event-ticket-reference?sourceEventId=1&_=cachebuster");
+  assert.equal(cachedTicketReference.reference.cached, true);
+  const refreshedTicketReference = await getJson("/api/event-ticket-reference?sourceEventId=1&force=1");
+  assert.equal(refreshedTicketReference.reference.cached, false);
+
   const suggestions = await getJson("/api/suggest?q=%E6%B0%B4&scope=events");
   assert.deepEqual(suggestions.items, ["水瀬いのり"]);
+  assert.equal(suggestions.groups.some((group) => group.id === "artists" && group.items[0]?.value === "水瀬いのり"), true);
 
   console.log("API smoke test passed");
 } catch (error) {

@@ -30,6 +30,13 @@ const localDb = createLocalDb({ dataRoot });
 const auth = createAuth({ dataRoot });
 let catalogCache;
 const rateLimitBuckets = new Map();
+const ticketPriceCache = new Map();
+const ticketPriceInFlight = new Map();
+const ticketPriceCacheMs = Number(process.env.TICKET_PRICE_CACHE_MS || 6 * 60 * 60 * 1000);
+const ticketFailureCacheMs = Number(process.env.TICKET_FAILURE_CACHE_MS || 10 * 60 * 1000);
+const ticketListingLimit = Number(process.env.TICKET_LISTING_LIMIT || 100);
+const ticketRequestTimeoutMs = Number(process.env.TICKET_REQUEST_TIMEOUT_MS || 8000);
+const ticketLookupEnabled = process.env.TICKET_LOOKUP_ENABLED !== "0";
 
 const types = {
   ".css": "text/css; charset=utf-8",
@@ -649,8 +656,18 @@ function eventNoteForUser(userId, sourceEventId) {
   return store.users[userId]?.[sourceEventId] || { status: "none", memo: "" };
 }
 
+const eventNoteStatuses = [
+  ["want", "想去"],
+  ["ticketing", "抽选/购票中"],
+  ["won", "已中票"],
+  ["paid", "已购票"],
+  ["done", "已参加"],
+  ["gaveup", "放弃"]
+];
+
 function sanitizeEventNote(body = {}) {
-  const status = ["none", "want", "ticketing", "done"].includes(body.status) ? body.status : "none";
+  const allowedStatuses = new Set(["none", ...eventNoteStatuses.map(([status]) => status)]);
+  const status = allowedStatuses.has(body.status) ? body.status : "none";
   return {
     status,
     memo: String(body.memo || "").slice(0, 300),
@@ -711,18 +728,14 @@ function isAdminUser(user) {
 
 function eventStatusStats(sourceEventId) {
   const notes = readEventNotes();
-  const counts = { want: 0, ticketing: 0, done: 0 };
+  const counts = Object.fromEntries(eventNoteStatuses.map(([status]) => [status, 0]));
   for (const userNotes of Object.values(notes.users || {})) {
     const status = userNotes?.[sourceEventId]?.status;
     if (status && Object.prototype.hasOwnProperty.call(counts, status)) counts[status] += 1;
   }
   return {
-    items: [
-      { status: "want", label: "想去", count: counts.want },
-      { status: "ticketing", label: "抽选/购票中", count: counts.ticketing },
-      { status: "done", label: "已参加", count: counts.done }
-    ],
-    total: counts.want + counts.ticketing + counts.done
+    items: eventNoteStatuses.map(([status, label]) => ({ status, label, count: counts[status] })),
+    total: Object.values(counts).reduce((sum, count) => sum + count, 0)
   };
 }
 
@@ -910,6 +923,243 @@ function eventExtraFor(sourceEventId) {
   return store.events[sourceEventId] || emptyEventExtra();
 }
 
+function tokyoDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function cleanTicketQuery(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ticketTitleQueryVariants(title) {
+  const rawTitle = cleanTicketQuery(title).replace(/^\[[^\]]+\]\s*/, "");
+  if (!rawTitle) return [];
+  const variants = [rawTitle];
+  const withoutPlaceSuffix = cleanTicketQuery(rawTitle
+    .replace(/\s+IN\s+[A-Z][A-Z\s-]*(?:\s+DAY\s*\d+)?$/i, "")
+    .replace(/\s+DAY\s*\d+$/i, ""));
+  if (withoutPlaceSuffix && withoutPlaceSuffix !== rawTitle) variants.push(withoutPlaceSuffix);
+
+  const quotedParts = [...rawTitle.matchAll(/「([^」]+)」/g)]
+    .map((match) => cleanTicketQuery(match[1]))
+    .filter(Boolean);
+  variants.push(...quotedParts);
+
+  const leadingAscii = rawTitle.match(/^[A-Z0-9][A-Z0-9\s.'&+-]+/i)?.[0];
+  if (leadingAscii) variants.push(cleanTicketQuery(leadingAscii));
+  return variants;
+}
+
+function ticketSearchQueries(event) {
+  const artists = (event.artists || []).filter(Boolean).slice(0, 2);
+  return [
+    ...ticketTitleQueryVariants(event.title),
+    [event.work, artists[0]].filter(Boolean).join(" "),
+    [artists[0], event.venue].filter(Boolean).join(" "),
+    artists[0] || event.work || event.title
+  ].map(cleanTicketQuery).filter(Boolean).filter((value, index, list) => list.indexOf(value) === index);
+}
+
+function ticketJamSearchUrl(query) {
+  return `https://ticketjam.jp/tickets_search?query=${encodeURIComponent(query)}`;
+}
+
+function normalizeTicketJamUrl(url) {
+  if (!url) return "";
+  if (url.startsWith("http")) return url;
+  return `https://ticketjam.jp${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+function stripHtml(value) {
+  return String(value || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchTicketJamHtml(url) {
+  const response = await fetch(url, {
+    headers: {
+      "accept": "text/html,application/xhtml+xml",
+      "user-agent": "eventnote-ticket-reference/0.1 (+https://github.com/AsabuMai/otakuevents)"
+    },
+    signal: AbortSignal.timeout(ticketRequestTimeoutMs)
+  });
+  if (!response.ok) return "";
+  return await response.text();
+}
+
+function findTicketJamEventUrl(html, eventDate) {
+  const dateSlash = String(eventDate || "").replaceAll("-", "/");
+  if (!dateSlash) return "";
+  const anchors = String(html || "").match(/<a\b[\s\S]*?<\/a>/gi) || [];
+  for (const anchor of anchors) {
+    if (!anchor.includes(dateSlash)) continue;
+    const hrefMatch = anchor.match(/href=["']([^"']*\/tickets\/[^"']+\/event\/\d+[^"']*)["']/);
+    if (hrefMatch) return normalizeTicketJamUrl(hrefMatch[1].replace(/&amp;/g, "&"));
+  }
+  return "";
+}
+
+function parseTicketJamListings(html, eventDate, { requireDate = true } = {}) {
+  const dateSlash = String(eventDate || "").replaceAll("-", "/");
+  const blocks = String(html || "").match(/<li\b[^>]*class=["'][^"']*eventlist__item[^"']*["'][\s\S]*?(?=<li\b[^>]*class=["'][^"']*eventlist__item|<\/ul>|<\/ol>|$)/gi) || [];
+  const rows = [];
+  for (const block of blocks) {
+    if (requireDate && dateSlash && !block.includes(dateSlash)) continue;
+    const priceMatch = block.match(/<span class=['"][^'"]*u-text-vivid-red[^'"]*['"][^>]*>\s*([\d,]+)\s*<\/span>\s*<small>\s*円\/枚\s*<\/small>/);
+    if (!priceMatch) continue;
+    const hrefMatch = block.match(/href=["'](\/ticket\/[^"']+)["']/);
+    const price = Number(priceMatch[1].replace(/,/g, ""));
+    if (!Number.isFinite(price)) continue;
+
+    const quantityMatch = block.match(/円\/枚[\s\S]{0,360}<span[^>]*class=['"][^'"]*bold[^'"]*['"][^>]*>\s*(\d+)\s*枚\s*<\/span>/);
+    const titleMatch = block.match(/class=['"][^'"]*align-middle[^'"]*['"][^>]*>([\s\S]*?)<\/span>/)
+      || block.match(/class=['"][^'"]*eventlist__title[^'"]*['"][^>]*>([\s\S]*?)<\/div>/);
+    const dateMatch = block.match(/class=['"][^'"]*venue[^'"]*['"][^>]*>([\s\S]*?)<\/div>/);
+    const descriptionMatch = block.match(/<p[^>]*class=['"][^'"]*description[^'"]*['"][^>]*>([\s\S]*?)<\/p>/);
+    const seatMatch = descriptionMatch?.[1]?.match(/class=['"][^'"]*font-weight-bold[^'"]*['"][^>]*>([\s\S]*?)<\/span>/);
+    const tags = [...block.matchAll(/class=['"][^'"]*(?:small-label|tag)[^'"]*['"][^>]*>([\s\S]*?)<\/(?:small|span|div|p|em)>/gi)]
+      .map((match) => stripHtml(match[1]))
+      .filter(Boolean)
+      .filter((value, index, list) => list.indexOf(value) === index)
+      .slice(0, 8);
+
+    rows.push({
+      price,
+      quantity: quantityMatch ? Number(quantityMatch[1]) : null,
+      url: hrefMatch ? normalizeTicketJamUrl(hrefMatch[1]) : "",
+      title: titleMatch ? stripHtml(titleMatch[1]) : "",
+      dateLine: dateMatch ? stripHtml(dateMatch[1]) : "",
+      seat: seatMatch ? stripHtml(seatMatch[1]) : "",
+      description: descriptionMatch ? stripHtml(descriptionMatch[1]) : "",
+      tags,
+      text: stripHtml(block).slice(0, 240)
+    });
+  }
+  return rows;
+}
+
+async function fetchTicketJamReference(event) {
+  const queries = [...new Set(ticketSearchQueries(event))];
+  const fallbackUrl = ticketJamSearchUrl(queries[0] || event.title || "");
+  if (!ticketLookupEnabled) {
+    return {
+      platform: "TicketJam",
+      status: "disabled",
+      searchUrl: fallbackUrl,
+      query: queries[0] || "",
+      minPrice: null,
+      listingCount: 0,
+      listings: [],
+      checkedAt: new Date().toISOString(),
+      message: "二手票参考已在服务器关闭。"
+    };
+  }
+  if (!event.date || event.date < tokyoDateKey()) {
+    return {
+      platform: "TicketJam",
+      status: "past_event",
+      searchUrl: fallbackUrl,
+      query: queries[0] || "",
+      minPrice: null,
+      listingCount: 0,
+      listings: [],
+      checkedAt: new Date().toISOString(),
+      message: "已结束活动不自动检查二手票价。"
+    };
+  }
+
+  let lastTicketFetchError = "";
+  for (const query of queries) {
+    const searchUrl = ticketJamSearchUrl(query);
+    try {
+      const html = await fetchTicketJamHtml(searchUrl);
+      if (!html) continue;
+      const listUrl = findTicketJamEventUrl(html, event.date);
+      let rows = [];
+      if (listUrl) {
+        const listHtml = await fetchTicketJamHtml(listUrl);
+        if (listHtml) rows = parseTicketJamListings(listHtml, event.date, { requireDate: false });
+      }
+      if (!rows.length) rows = parseTicketJamListings(html, event.date);
+      if (!rows.length) continue;
+      rows.sort((a, b) => a.price - b.price);
+      return {
+        platform: "TicketJam",
+        status: "found",
+        searchUrl,
+        listUrl: listUrl || searchUrl,
+        query,
+        minPrice: rows[0].price,
+        listingCount: rows.length,
+        returnedListingCount: Math.min(rows.length, ticketListingLimit),
+        sampleUrl: rows[0].url,
+        listings: rows.slice(0, ticketListingLimit),
+        checkedAt: new Date().toISOString(),
+        message: "票酱公开出品列表的缓存参考，购买前请自行确认票券条件。"
+      };
+    } catch (error) {
+      const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+      lastTicketFetchError = timedOut ? "timeout" : "error";
+      // Try the next conservative query; failures are reported as unavailable below.
+    }
+  }
+
+  return {
+    platform: "TicketJam",
+    status: lastTicketFetchError || "not_found",
+    searchUrl: fallbackUrl,
+    query: queries[0] || "",
+    minPrice: null,
+    listingCount: 0,
+    listings: [],
+    checkedAt: new Date().toISOString(),
+    message: lastTicketFetchError === "timeout"
+      ? "票酱公开页面响应超时，请稍后再刷新。"
+      : lastTicketFetchError === "error"
+        ? "票酱公开页面暂时读取失败，请稍后再试。"
+        : "暂未从公开搜索页匹配到同日期出品。"
+  };
+}
+
+function ticketCacheTtl(payload) {
+  return payload?.status === "found" || payload?.status === "past_event" || payload?.status === "disabled"
+    ? ticketPriceCacheMs
+    : ticketFailureCacheMs;
+}
+
+async function ticketReferenceForEvent(event, force = false) {
+  const key = `ticketjam:${event.sourceEventId}`;
+  const cached = ticketPriceCache.get(key);
+  if (!force && cached && Date.now() - cached.cachedAt < ticketCacheTtl(cached.payload)) return { ...cached.payload, cached: true };
+  if (!force && ticketPriceInFlight.has(key)) {
+    const payload = await ticketPriceInFlight.get(key);
+    return { ...payload, cached: false, shared: true };
+  }
+  const pending = fetchTicketJamReference(event).finally(() => ticketPriceInFlight.delete(key));
+  ticketPriceInFlight.set(key, pending);
+  const payload = await pending;
+  ticketPriceCache.set(key, { cachedAt: Date.now(), payload });
+  return { ...payload, cached: false };
+}
+
 function requireUser(request, response) {
   const user = auth.getCurrentUser(request);
   if (!user) {
@@ -946,6 +1196,15 @@ function pushSuggestion(target, seen, value, query, limit) {
   if (!text || seen.has(text) || !text.toLowerCase().includes(query)) return;
   seen.add(text);
   target.push(text);
+  return target.length >= limit;
+}
+
+function pushTypedSuggestion(target, seen, value, query, limit, type, label, meta = "") {
+  const text = String(value || "").trim();
+  const key = `${type}:${text}`;
+  if (!text || seen.has(key) || !text.toLowerCase().includes(query)) return;
+  seen.add(key);
+  target.push({ type, label, value: text, meta });
   return target.length >= limit;
 }
 
@@ -1094,6 +1353,19 @@ async function handleApi(request, pathname, searchParams, response) {
   if (pathname === "/api/event-extra" && request.method === "GET") {
     const sourceEventId = searchParams.get("sourceEventId") || "";
     sendJson(response, { extra: eventExtraFor(sourceEventId) });
+    return true;
+  }
+
+  if (pathname === "/api/event-ticket-reference" && request.method === "GET") {
+    const sourceEventId = searchParams.get("sourceEventId") || "";
+    const event = catalog.indexes.eventsBySourceId.get(sourceEventId);
+    if (!event) {
+      response.statusCode = 404;
+      sendJson(response, { error: "Event not found" });
+      return true;
+    }
+    const forceRefresh = ["1", "true"].includes(String(searchParams.get("force") || "").toLowerCase());
+    sendJson(response, { reference: await ticketReferenceForEvent(event, forceRefresh) });
     return true;
   }
 
@@ -1436,37 +1708,67 @@ async function handleApi(request, pathname, searchParams, response) {
     const scope = searchParams.get("scope") || "events";
     const limit = Math.min(12, Math.max(1, Number(searchParams.get("limit") || 8)));
     const suggestions = [];
+    const groups = [];
     const seen = new Set();
+    const typedSeen = new Set();
+    const addGroup = (id, label, rows) => {
+      if (rows.length) groups.push({ id, label, items: rows });
+    };
 
     if (scope === "artists") {
       for (const artist of catalog.artists) {
         if (pushSuggestion(suggestions, seen, artist.name, query, limit)) break;
       }
+      addGroup("artists", "出演者", suggestions.map((value) => ({ type: "artist", label: "出演者", value, meta: "" })));
     } else if (scope === "works") {
       for (const work of catalog.works) {
         if (!isMeaningfulWorkTitle(work.title)) continue;
         if (workMatches(work, query) && pushSuggestion(suggestions, seen, work.title, "", limit)) break;
       }
+      addGroup("works", "作品", suggestions.map((value) => ({ type: "work", label: "作品", value, meta: "" })));
     } else if (scope === "venues") {
       for (const venue of catalog.venues) {
         if (!isConcreteVenueName(venue.name)) continue;
         if (pushSuggestion(suggestions, seen, venue.name, query, limit)) break;
       }
+      addGroup("venues", "会场", suggestions.map((value) => ({ type: "venue", label: "会场", value, meta: "" })));
     } else {
+      const eventRows = [];
+      for (const event of catalog.events) {
+        if (pushTypedSuggestion(eventRows, typedSeen, event.title, query, 4, "event", "活动", event.date || "")) break;
+      }
+      addGroup("events", "活动", eventRows);
       for (const artist of catalog.artists) {
         if (pushSuggestion(suggestions, seen, artist.name, query, limit)) break;
       }
+      const artistRows = [];
+      for (const artist of catalog.artists) {
+        if (pushTypedSuggestion(artistRows, typedSeen, artist.name, query, 4, "artist", "出演者", `${artist.events?.toLocaleString("ja-JP") || 0} 场`)) break;
+      }
+      addGroup("artists", "出演者", artistRows);
       for (const work of catalog.works) {
         if (!isMeaningfulWorkTitle(work.title)) continue;
         if (workMatches(work, query) && pushSuggestion(suggestions, seen, work.title, "", limit)) break;
       }
+      const workRows = [];
+      for (const work of catalog.works) {
+        if (!isMeaningfulWorkTitle(work.title)) continue;
+        if (workMatches(work, query) && pushTypedSuggestion(workRows, typedSeen, work.title, "", 4, "work", "作品", work.category || "")) break;
+      }
+      addGroup("works", "作品", workRows);
       for (const venue of catalog.venues) {
         if (!isConcreteVenueName(venue.name)) continue;
         if (pushSuggestion(suggestions, seen, venue.name, query, limit)) break;
       }
+      const venueRows = [];
+      for (const venue of catalog.venues) {
+        if (!isConcreteVenueName(venue.name)) continue;
+        if (pushTypedSuggestion(venueRows, typedSeen, venue.name, query, 4, "venue", "会场", venue.area || "")) break;
+      }
+      addGroup("venues", "会场", venueRows);
     }
 
-    sendJson(response, { items: suggestions });
+    sendJson(response, { items: suggestions.slice(0, limit), groups });
     return true;
   }
 
