@@ -214,7 +214,7 @@ const template = `
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
           </button>
         </div>
-        <button class="primary-button desktop-add-button" type="button" @click="authUser ? go('favorites') : go('profile')">+ 添加活动</button>
+        <button class="primary-button desktop-add-button" type="button" @click="authUser ? go('favorites') : go('profile')">+ 记录计划</button>
       </div>
 
       <form class="filter-bar" :class="{ expanded: showMobileFilters }" @submit.prevent>
@@ -2102,7 +2102,7 @@ createApp({
     const mobileNavItems = computed(() => [
       { id: "events", short: "日历" },
       { id: "favorites", short: "我的活动" },
-      { id: "profile", short: "添加活动", add: true },
+      { id: "profile", short: "记录计划", add: true },
       { id: "home", short: "发现" },
       { id: "sources", short: "更多" }
     ].filter((item) => item.id !== "sources" || visibleNavItems.value.some((nav) => nav.id === "sources")));
